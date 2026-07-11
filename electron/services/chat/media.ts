@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url'
 import { dbAdapter } from '../dbAdapter'
 import { getDbStoragePath } from '../dbStoragePaths'
 import { imageDecryptService } from '../imageDecryptService'
+import { getDefaultCachePath as getPlatformDefaultCachePath } from '../platformService'
 import { quoteIdent } from '../statsSqlHelpers'
 import { getAppPath, isElectronPackaged } from '../runtimePaths'
 import { cleanAccountDirName } from './accountUtils'
@@ -584,6 +585,105 @@ export async function getVoiceData(
     }
   } catch (e) {
     return { success: false, error: String(e) }
+  }
+}
+
+export type EnsureVoiceFileResult = {
+  success: boolean
+  localPath?: string
+  existed?: boolean
+  error?: string
+}
+
+function sanitizeVoicePathSegment(value: string): string {
+  const sanitized = String(value || '')
+    .trim()
+    .replace(/[\\/:*?"<>|\x00-\x1f]/g, '_')
+    .replace(/^\.+$/, '_')
+  return sanitized || '_'
+}
+
+function isValidVoiceFile(filePath: string): boolean {
+  try {
+    const stats = fs.statSync(filePath)
+    return stats.isFile() && stats.size > 44
+  } catch {
+    return false
+  }
+}
+
+function getVoiceCacheMonth(createTime: number): string {
+  const date = new Date(createTime * 1000)
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  return `${year}-${month}`
+}
+
+/**
+ * 确保聊天语音已解码并持久化为 WAV。
+ * 路径与 Images 缓存同构：Voices/{sessionId}/{YYYY-MM}/{createTime}_{localId}.wav。
+ * 写入通过同目录临时文件 + rename，避免留下半文件。
+ */
+export async function ensureVoiceFile(
+  state: ChatServiceState,
+  sessionId: string,
+  msgId: string,
+  createTime?: number,
+  serverId?: number
+): Promise<EnsureVoiceFileResult> {
+  const localId = Number.parseInt(msgId, 10)
+  if (!Number.isFinite(localId) || localId <= 0) {
+    return { success: false, error: '无效的消息ID' }
+  }
+
+  let msgCreateTime = Number(createTime || 0)
+  if (!msgCreateTime) {
+    const messageResult = await getMessageByLocalId(state, sessionId, localId)
+    msgCreateTime = Number(messageResult.message?.createTime || 0)
+  }
+  if (!msgCreateTime) {
+    return { success: false, error: '未找到消息时间戳' }
+  }
+
+  const configuredCachePath = String(state.configService.get('cachePath') || '').trim()
+  const cacheRoot = configuredCachePath || getPlatformDefaultCachePath()
+  const voiceDir = path.join(
+    cacheRoot,
+    'Voices',
+    sanitizeVoicePathSegment(sessionId),
+    getVoiceCacheMonth(msgCreateTime)
+  )
+  const localPath = path.join(voiceDir, `${msgCreateTime}_${localId}.wav`)
+
+  if (isValidVoiceFile(localPath)) {
+    return { success: true, localPath, existed: true }
+  }
+
+  const voiceResult = await getVoiceData(state, sessionId, msgId, msgCreateTime, serverId)
+  if (!voiceResult.success || !voiceResult.data) {
+    return { success: false, error: voiceResult.error || '语音读取失败' }
+  }
+
+  const wavData = Buffer.from(voiceResult.data, 'base64')
+  if (wavData.length <= 44) {
+    return { success: false, error: '解码后的语音文件为空' }
+  }
+
+  const tempPath = `${localPath}.${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.tmp`
+  try {
+    await fs.promises.mkdir(voiceDir, { recursive: true })
+    await fs.promises.writeFile(tempPath, wavData)
+    if (!isValidVoiceFile(tempPath)) {
+      throw new Error('语音临时文件写入不完整')
+    }
+    if (fs.existsSync(localPath)) {
+      await fs.promises.unlink(localPath)
+    }
+    await fs.promises.rename(tempPath, localPath)
+    return { success: true, localPath, existed: false }
+  } catch (error) {
+    try { await fs.promises.unlink(tempPath) } catch { }
+    return { success: false, error: `保存语音文件失败: ${String(error)}` }
   }
 }
 

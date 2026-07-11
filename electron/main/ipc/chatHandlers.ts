@@ -258,6 +258,14 @@ export function registerChatHandlers(ctx: MainProcessContext): void {
     return result
   })
 
+  ipcMain.handle('chat:ensureVoiceFile', async (_, sessionId: string, msgId: string, createTime?: number, serverId?: number) => {
+    const result = await chatService.ensureVoiceFile(sessionId, msgId, createTime, serverId)
+    if (!result.success) {
+      ctx.getLogService()?.warn('Chat', '保存语音文件失败', { sessionId, msgId, createTime, serverId, error: result.error })
+    }
+    return result
+  })
+
   ipcMain.handle('chat:getMessagesByDate', async (_, sessionId: string, targetTimestamp: number, limit?: number) => {
     const result = await chatService.getMessagesByDate(sessionId, targetTimestamp, limit)
     if (!result.success) {

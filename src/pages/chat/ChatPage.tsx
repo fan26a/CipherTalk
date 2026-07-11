@@ -207,7 +207,11 @@ function ChatPage(_props: ChatPageProps) {
   // 批量语音转文字相关状态
   const [isBatchTranscribing, setIsBatchTranscribing] = useState(false)
   const [isExportingVoiceSample, setIsExportingVoiceSample] = useState(false)
-  const [batchTranscribeProgress, setBatchTranscribeProgress] = useState({ current: 0, total: 0 })
+  const [batchTranscribeProgress, setBatchTranscribeProgress] = useState<{
+    current: number
+    total: number
+    phase: 'saving' | 'transcribing'
+  }>({ current: 0, total: 0, phase: 'saving' })
   const [showBatchConfirm, setShowBatchConfirm] = useState(false)
   const [batchVoiceCount, setBatchVoiceCount] = useState(0) // 保存查询到的语音消息数量
   const [batchVoiceMessages, setBatchVoiceMessages] = useState<Message[] | null>(null) // 当前会话所有语音消息（用于按日期筛选）
@@ -215,7 +219,7 @@ function ChatPage(_props: ChatPageProps) {
   const [batchSelectedDates, setBatchSelectedDates] = useState<Set<string>>(new Set()) // 用户选中的要转写的日期
   const [showBatchProgress, setShowBatchProgress] = useState(false) // 显示进度对话框
   const [showBatchResult, setShowBatchResult] = useState(false) // 显示结果对话框
-  const [batchResult, setBatchResult] = useState({ success: 0, fail: 0 }) // 转写结果
+  const [batchResult, setBatchResult] = useState({ success: 0, fail: 0, failedCreateTimes: [] as number[] }) // 转写结果
 
   // 批量解密图片相关状态
   const [isBatchDecrypting, setIsBatchDecrypting] = useState(false)
@@ -1189,113 +1193,124 @@ function ChatPage(_props: ChatPageProps) {
     
     setIsBatchTranscribing(true)
     setShowBatchProgress(true) // 显示进度对话框
-    setBatchTranscribeProgress({ current: 0, total: voiceMessages.length })
+    setBatchTranscribeProgress({ current: 0, total: voiceMessages.length, phase: 'saving' })
 
-    // 检查 STT 模式和模型
-    const sttMode = await window.electronAPI.config.get('sttMode') || 'cpu'
-    
-    let modelExists = false
-    let concurrency = 5
-    if (sttMode === 'gpu') {
-      const whisperModelType = (await window.electronAPI.config.get('whisperModelType') as string) || 'small'
-      const modelStatus = await window.electronAPI.sttWhisper.checkModel(whisperModelType)
-      modelExists = modelStatus.exists
-      
-      if (!modelExists) {
-        alert(`Whisper ${whisperModelType} 模型未下载，请先在设置中下载模型`)
-        setIsBatchTranscribing(false)
-        setShowBatchProgress(false)
-        return
-      }
-    } else if (sttMode === 'online') {
-      const onlineReady = await checkOnlineSttConfigReady()
-      if (!onlineReady.ready) {
-        alert(onlineReady.error)
-        setIsBatchTranscribing(false)
-        setShowBatchProgress(false)
-        return
-      }
-      const savedConcurrency = Number(await window.electronAPI.config.get('sttOnlineMaxConcurrency')) || 2
-      concurrency = Math.max(1, Math.min(10, Math.floor(savedConcurrency)))
-    } else {
-      const modelStatus = await window.electronAPI.stt.getModelStatus()
-      modelExists = !!(modelStatus.success && modelStatus.exists)
-      
-      if (!modelExists) {
-        alert('SenseVoice 模型未下载，请先在设置中下载模型')
-        setIsBatchTranscribing(false)
-        setShowBatchProgress(false)
-        return
-      }
-    }
-
-    // 并发批量转写
     let successCount = 0
     let failCount = 0
-    let completedCount = 0
-    
-    // 并发数量限制（避免同时处理太多导致内存溢出）
-    // 转写单条语音的函数
-    const transcribeOne = async (msg: any) => {
-      try {
-        // 检查是否已有缓存
-        const cached = await window.electronAPI.stt.getCachedTranscript(session.username, msg.createTime)
-        
-        if (cached && cached.success && cached.transcript) {
-          return { success: true, cached: true }
+    const failedCreateTimes: number[] = []
+    const pendingTranscriptions: Array<{ message: Message; localPath: string }> = []
+    let savedCount = 0
+
+    // 第一阶段：整批语音先落盘，固定 3 路并发以限制 SILK 解码的内存峰值。
+    const SAVE_CONCURRENCY = 3
+    for (let i = 0; i < voiceMessages.length; i += SAVE_CONCURRENCY) {
+      const batch = voiceMessages.slice(i, i + SAVE_CONCURRENCY)
+      const prepared = await Promise.all(batch.map(async (message) => {
+        try {
+          const [cached, voiceFile] = await Promise.all([
+            window.electronAPI.stt.getCachedTranscript(session.username, message.createTime),
+            window.electronAPI.chat.ensureVoiceFile(
+              session.username,
+              String(message.localId),
+              message.createTime,
+              message.serverId
+            )
+          ])
+          if (!voiceFile.success || !voiceFile.localPath) return { success: false as const, message }
+          return {
+            success: true as const,
+            message,
+            localPath: voiceFile.localPath,
+            hasTranscript: Boolean(cached.success && cached.transcript)
+          }
+        } catch {
+          return { success: false as const, message }
         }
+      }))
 
-        // 获取语音数据
-        const result = await window.electronAPI.chat.getVoiceData(
-          session.username,
-          String(msg.localId),
-          msg.createTime,
-          msg.serverId
-        )
-
-        if (!result.success || !result.data) {
-          return { success: false }
-        }
-
-        // 转写
-        const transcribeResult = await window.electronAPI.stt.transcribe(
-          result.data,
-          session.username,
-          msg.createTime,
-          false
-        )
-
-        return { success: transcribeResult.success }
-      } catch (e) {
-        return { success: false }
-      }
-    }
-
-    // 使用 Promise.all 分批并发处理
-    for (let i = 0; i < voiceMessages.length; i += concurrency) {
-      const batch = voiceMessages.slice(i, i + concurrency)
-      
-      const results = await Promise.all(
-        batch.map(msg => transcribeOne(msg))
-      )
-
-      // 统计结果
-      results.forEach(result => {
-        if (result.success) {
+      prepared.forEach((item) => {
+        if (!item.success) {
+          failCount++
+          failedCreateTimes.push(item.message.createTime)
+        } else if (item.hasTranscript) {
+          // 文字已存在时只确保本地文件存在，不重复调用 STT。
           successCount++
         } else {
-          failCount++
+          pendingTranscriptions.push({ message: item.message, localPath: item.localPath })
         }
-        completedCount++
-        setBatchTranscribeProgress({ current: completedCount, total: voiceMessages.length })
+        savedCount++
+        setBatchTranscribeProgress({ current: savedCount, total: voiceMessages.length, phase: 'saving' })
       })
+    }
+
+    if (pendingTranscriptions.length > 0) {
+      // 所有语音完成落盘后，才检查 STT 模式和模型。
+      const sttMode = await window.electronAPI.config.get('sttMode') || 'cpu'
+      let concurrency = 5
+      if (sttMode === 'gpu') {
+        const whisperModelType = (await window.electronAPI.config.get('whisperModelType') as string) || 'small'
+        const modelStatus = await window.electronAPI.sttWhisper.checkModel(whisperModelType)
+        if (!modelStatus.exists) {
+          alert(`Whisper ${whisperModelType} 模型未下载，请先在设置中下载模型；语音文件已保存到本地`)
+          setIsBatchTranscribing(false)
+          setShowBatchProgress(false)
+          return
+        }
+      } else if (sttMode === 'online') {
+        const onlineReady = await checkOnlineSttConfigReady()
+        if (!onlineReady.ready) {
+          alert(`${onlineReady.error}；语音文件已保存到本地`)
+          setIsBatchTranscribing(false)
+          setShowBatchProgress(false)
+          return
+        }
+        const savedConcurrency = Number(await window.electronAPI.config.get('sttOnlineMaxConcurrency')) || 2
+        concurrency = Math.max(1, Math.min(10, Math.floor(savedConcurrency)))
+      } else {
+        const modelStatus = await window.electronAPI.stt.getModelStatus()
+        if (!modelStatus.success || !modelStatus.exists) {
+          alert('SenseVoice 模型未下载，请先在设置中下载模型；语音文件已保存到本地')
+          setIsBatchTranscribing(false)
+          setShowBatchProgress(false)
+          return
+        }
+      }
+
+      let transcribedCount = 0
+      setBatchTranscribeProgress({ current: 0, total: pendingTranscriptions.length, phase: 'transcribing' })
+      for (let i = 0; i < pendingTranscriptions.length; i += concurrency) {
+        const batch = pendingTranscriptions.slice(i, i + concurrency)
+        const results = await Promise.all(batch.map(async ({ message, localPath }) => {
+          try {
+            return await window.electronAPI.stt.transcribeFile(
+              localPath,
+              session.username,
+              message.createTime,
+              false
+            )
+          } catch {
+            return { success: false }
+          }
+        }))
+
+        results.forEach((result, index) => {
+          if (result.success) {
+            successCount++
+          } else {
+            failCount++
+            failedCreateTimes.push(batch[index].message.createTime)
+          }
+          transcribedCount++
+          setBatchTranscribeProgress({ current: transcribedCount, total: pendingTranscriptions.length, phase: 'transcribing' })
+        })
+      }
     }
 
     setIsBatchTranscribing(false)
     setShowBatchProgress(false) // 隐藏进度对话框
     
     // 显示结果对话框
-    setBatchResult({ success: successCount, fail: failCount })
+    setBatchResult({ success: successCount, fail: failCount, failedCreateTimes })
     setShowBatchResult(true)
   }, [sessions, currentSessionId, batchSelectedDates, batchVoiceMessages, checkOnlineSttConfigReady])
 
@@ -1809,7 +1824,6 @@ function ChatPage(_props: ChatPageProps) {
         showResult={showBatchResult}
         result={batchResult}
         onCloseResult={() => setShowBatchResult(false)}
-        voiceMessages={batchVoiceMessages}
       />
 
       <BatchDecryptModal

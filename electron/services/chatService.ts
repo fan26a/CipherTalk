@@ -33,6 +33,7 @@ import {
   getMessageByLocalIdFromTable,
   getImageData,
   getVoiceData,
+  ensureVoiceFile,
 } from './chat/media'
 import {
   findSessionTables,
@@ -612,6 +613,15 @@ class ChatService extends EventEmitter {
     serverId?: number
   ): Promise<{ success: boolean; data?: string; error?: string }> {
     return getVoiceData(this.state, sessionId, msgId, createTime, serverId)
+  }
+
+  async ensureVoiceFile(
+    sessionId: string,
+    msgId: string,
+    createTime?: number,
+    serverId?: number
+  ): Promise<{ success: boolean; localPath?: string; existed?: boolean; error?: string }> {
+    return ensureVoiceFile(this.state, sessionId, msgId, createTime, serverId)
   }
 
   /**

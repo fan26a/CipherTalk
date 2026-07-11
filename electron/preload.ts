@@ -756,6 +756,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     setCurrentSession: (sessionId: string | null) => ipcRenderer.invoke('chat:setCurrentSession', sessionId),
     getSessionDetail: (sessionId: string) => ipcRenderer.invoke('chat:getSessionDetail', sessionId),
     getVoiceData: (sessionId: string, msgId: string, createTime?: number, serverId?: number) => ipcRenderer.invoke('chat:getVoiceData', sessionId, msgId, createTime, serverId),
+    ensureVoiceFile: (sessionId: string, msgId: string, createTime?: number, serverId?: number) => ipcRenderer.invoke('chat:ensureVoiceFile', sessionId, msgId, createTime, serverId),
     getMessagesByDate: (sessionId: string, targetTimestamp: number, limit?: number) =>
       ipcRenderer.invoke('chat:getMessagesByDate', sessionId, targetTimestamp, limit),
     getMessage: (sessionId: string, localId: number) => ipcRenderer.invoke('chat:getMessage', sessionId, localId),
@@ -847,6 +848,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     downloadModel: () => ipcRenderer.invoke('stt:downloadModel'),
     cancelDownloadModel: () => ipcRenderer.invoke('stt:cancelDownloadModel'),
     transcribe: (wavBase64: string, sessionId: string, createTime: number, force?: boolean) => ipcRenderer.invoke('stt:transcribe', wavBase64, sessionId, createTime, force),
+    transcribeFile: (filePath: string, sessionId: string, createTime: number, force?: boolean) => ipcRenderer.invoke('stt:transcribeFile', filePath, sessionId, createTime, force),
     testOnlineConfig: (overrides?: { provider?: 'openai-compatible' | 'aliyun-qwen-asr' | 'qianwen-cloud' | 'volcano-doubao' | 'custom'; apiKey?: string; baseURL?: string; model?: string; language?: string; timeoutMs?: number }) =>
       ipcRenderer.invoke('stt-online:test-config', overrides),
     onDownloadProgress: (callback: (progress: { modelName: string; downloadedBytes: number; totalBytes?: number; percent?: number }) => void) => {

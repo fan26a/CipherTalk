@@ -1,10 +1,10 @@
+import { useState } from 'react'
 import { CircleCheck, CircleDashed, CircleExclamation, CircleXmark, Microphone } from '@gravity-ui/icons'
 import { Button, Checkbox, Label, Modal, ProgressBar } from '@heroui/react'
-import type { Message } from '../../../types/models'
 import { formatBatchDateLabel } from '../utils/time'
 
-type Progress = { current: number; total: number }
-type Result = { success: number; fail: number }
+type Progress = { current: number; total: number; phase: 'saving' | 'transcribing' }
+type Result = { success: number; fail: number; failedCreateTimes: number[] }
 
 interface BatchTranscribeModalProps {
   showConfirm: boolean
@@ -22,7 +22,18 @@ interface BatchTranscribeModalProps {
   showResult: boolean
   result: Result
   onCloseResult: () => void
-  voiceMessages: Message[] | null
+}
+
+function formatFailedVoiceTime(createTime: number): string {
+  return new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  }).format(new Date(createTime * 1000))
 }
 
 export function BatchTranscribeModal({
@@ -42,6 +53,13 @@ export function BatchTranscribeModal({
   result,
   onCloseResult
 }: BatchTranscribeModalProps) {
+  const [showFailureDetails, setShowFailureDetails] = useState(false)
+
+  const closeResult = () => {
+    setShowFailureDetails(false)
+    onCloseResult()
+  }
+
   return (
     <>
       <Modal.Backdrop isOpen={showConfirm} onOpenChange={(open) => { if (!open) onCloseConfirm() }}>
@@ -100,7 +118,7 @@ export function BatchTranscribeModal({
 
               <div className="mt-3 flex items-start gap-2 rounded-lg bg-warning-soft p-3 text-sm text-warning-soft-foreground">
                 <CircleExclamation width={16} height={16} className="mt-0.5 shrink-0" />
-                <span>批量转写可能需要较长时间，转写过程中可以继续使用其他功能。已转写过的语音会自动跳过。</span>
+                <span>批量转写可能需要较长时间，处理过程中可以继续使用其他功能。本地语音和文字均存在时会自动跳过。</span>
               </div>
             </Modal.Body>
             <Modal.Footer>
@@ -121,21 +139,27 @@ export function BatchTranscribeModal({
               <Modal.Icon className="bg-default text-foreground">
                 <CircleDashed className="size-5 animate-spin" />
               </Modal.Icon>
-              <Modal.Heading>正在转写...</Modal.Heading>
+              <Modal.Heading>{progress.phase === 'saving' ? '正在保存语音...' : '正在转换文字...'}</Modal.Heading>
             </Modal.Header>
             <Modal.Body>
               <ProgressBar aria-label="转写进度" value={progress.current} maxValue={Math.max(1, progress.total)}>
-                <Label>已完成 {progress.current} / {progress.total} 条</Label>
+                <Label>
+                  {progress.phase === 'saving' ? '已保存' : '已转换'} {progress.current} / {progress.total} 条
+                </Label>
                 <ProgressBar.Output />
                 <ProgressBar.Track><ProgressBar.Fill /></ProgressBar.Track>
               </ProgressBar>
-              <p className="mt-2 text-xs text-muted">转写过程中可以继续使用其他功能</p>
+              <p className="mt-2 text-xs text-muted">
+                {progress.phase === 'saving'
+                  ? '全部语音保存完成后再开始文字转换'
+                  : '正在使用本地语音文件转换文字'}
+              </p>
             </Modal.Body>
           </Modal.Dialog>
         </Modal.Container>
       </Modal.Backdrop>
 
-      <Modal.Backdrop isOpen={showResult} onOpenChange={(open) => { if (!open) onCloseResult() }}>
+      <Modal.Backdrop isOpen={showResult} onOpenChange={(open) => { if (!open) closeResult() }}>
         <Modal.Container>
           <Modal.Dialog className="sm:max-w-90">
             <Modal.CloseTrigger />
@@ -153,10 +177,15 @@ export function BatchTranscribeModal({
                   <span className="font-medium">{result.success} 条</span>
                 </div>
                 {result.fail > 0 && (
-                  <div className="flex items-center gap-2">
-                    <CircleXmark width={18} height={18} className="text-danger" />
-                    <span className="text-muted">失败：</span>
-                    <span className="font-medium">{result.fail} 条</span>
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <CircleXmark width={18} height={18} className="text-danger" />
+                      <span className="text-muted">失败：</span>
+                      <span className="font-medium">{result.fail} 条</span>
+                    </div>
+                    <Button size="sm" variant="tertiary" onPress={() => setShowFailureDetails(true)}>
+                      查看详情
+                    </Button>
                   </div>
                 )}
               </div>
@@ -169,6 +198,46 @@ export function BatchTranscribeModal({
             </Modal.Body>
             <Modal.Footer>
               <Button slot="close">确定</Button>
+            </Modal.Footer>
+          </Modal.Dialog>
+        </Modal.Container>
+      </Modal.Backdrop>
+
+      <Modal.Backdrop
+        isOpen={showResult && showFailureDetails}
+        onOpenChange={(open) => { if (!open) setShowFailureDetails(false) }}
+      >
+        <Modal.Container>
+          <Modal.Dialog className="sm:max-w-105">
+            <Modal.CloseTrigger />
+            <Modal.Header>
+              <Modal.Icon className="bg-danger-soft text-danger-soft-foreground">
+                <CircleXmark className="size-5" />
+              </Modal.Icon>
+              <Modal.Heading>转写失败详情</Modal.Heading>
+            </Modal.Header>
+            <Modal.Body>
+              <p className="text-sm text-muted">以下时间的语音转写失败：</p>
+              {result.failedCreateTimes.length > 0 ? (
+                <ol className="mt-2 flex max-h-72 flex-col gap-2 overflow-y-auto pr-1">
+                  {result.failedCreateTimes.map((createTime, index) => (
+                    <li
+                      key={`${createTime}-${index}`}
+                      className="flex items-center gap-3 rounded-lg bg-surface px-3 py-2 text-sm"
+                    >
+                      <span className="w-6 shrink-0 text-right text-xs text-muted">{index + 1}</span>
+                      <time dateTime={new Date(createTime * 1000).toISOString()} className="font-medium">
+                        {formatFailedVoiceTime(createTime)}
+                      </time>
+                    </li>
+                  ))}
+                </ol>
+              ) : (
+                <p className="mt-2 rounded-lg bg-surface px-3 py-2 text-sm text-muted">未记录到失败时间</p>
+              )}
+            </Modal.Body>
+            <Modal.Footer>
+              <Button slot="close">关闭</Button>
             </Modal.Footer>
           </Modal.Dialog>
         </Modal.Container>

@@ -1088,6 +1088,12 @@ export interface ElectronAPI {
       data?: string  // base64 encoded WAV
       error?: string
     }>
+    ensureVoiceFile: (sessionId: string, msgId: string, createTime?: number, serverId?: number) => Promise<{
+      success: boolean
+      localPath?: string
+      existed?: boolean
+      error?: string
+    }>
     getMessagesByDate: (sessionId: string, targetTimestamp: number, limit?: number) => Promise<{
       success: boolean
       messages?: Message[]
@@ -1326,6 +1332,14 @@ export interface ElectronAPI {
       error?: string
     }>
     transcribe: (wavBase64: string, sessionId: string, createTime: number, force?: boolean) => Promise<{
+      success: boolean
+      transcript?: string
+      cached?: boolean
+      sttMode?: 'cpu' | 'gpu' | 'online'
+      errorCode?: 'BAD_REQUEST' | 'STT_NOT_READY' | 'INTERNAL_ERROR'
+      error?: string
+    }>
+    transcribeFile: (filePath: string, sessionId: string, createTime: number, force?: boolean) => Promise<{
       success: boolean
       transcript?: string
       cached?: boolean

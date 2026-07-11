@@ -68,6 +68,21 @@ export function registerSttHandlers(ctx: MainProcessContext): void {
     }
   })
 
+  ipcMain.handle('stt:transcribeFile', async (event, filePath: string, sessionId: string, createTime: number, force?: boolean) => {
+    try {
+      const win = BrowserWindow.fromWebContents(event.sender)
+      return await sttRuntimeService.transcribeAudioFile(filePath, {
+        cache: { sessionId, createTime, force },
+        onPartial: (text) => {
+          win?.webContents.send('stt:partialResult', text)
+        }
+      })
+    } catch (e) {
+      console.error('[Main] stt:transcribeFile 异常:', e)
+      return { success: false, error: String(e) }
+    }
+  })
+
   // 获取缓存的转写结果
   ipcMain.handle('stt:getCachedTranscript', async (_, sessionId: string, createTime: number) => {
     try {

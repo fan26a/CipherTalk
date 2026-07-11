@@ -182,11 +182,27 @@ class SttRuntimeService {
     return { valid: true }
   }
 
-  async transcribeAudioFile(filePath: string): Promise<RuntimeTranscribeResult> {
+  async transcribeAudioFile(
+    filePath: string,
+    options: RuntimeTranscribeOptions = {}
+  ): Promise<RuntimeTranscribeResult> {
     const sttMode = this.getCurrentSttMode()
     const validation = this.validateAudioFilePath(filePath)
     if (!validation.valid) {
       return { success: false, sttMode, error: validation.error, errorCode: 'INTERNAL_ERROR' }
+    }
+
+    if (extname(filePath).toLowerCase() === '.wav') {
+      try {
+        return await this.transcribeWavBuffer(readFileSync(filePath), options)
+      } catch (error) {
+        return {
+          success: false,
+          sttMode,
+          error: String(error),
+          errorCode: isReadinessError(String(error)) ? 'STT_NOT_READY' : 'INTERNAL_ERROR'
+        }
+      }
     }
 
     const ready = await this.checkReady(sttMode)
@@ -200,7 +216,7 @@ class SttRuntimeService {
     try {
       await this.convertAudioToWav(filePath, wavPath)
       const wavData = readFileSync(wavPath)
-      return await this.transcribeWavBuffer(wavData)
+      return await this.transcribeWavBuffer(wavData, options)
     } catch (error) {
       return {
         success: false,
