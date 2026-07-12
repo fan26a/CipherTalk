@@ -7,7 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import { useChat } from '@ai-sdk/react'
 import { isToolUIPart, lastAssistantMessageIsCompleteWithApprovalResponses, type ChatStatus, type UIMessage } from 'ai'
 import { AlertDialog, Button as HeroButton, ButtonGroup, Dropdown, Header, Label, Modal, SearchField, Separator, Spinner, Surface, Switch, Toolbar, Tooltip, toast } from '@heroui/react'
-import { ArrowDownToLine, ArrowUpRightFromSquare, Bulb, Check, ChevronDown, CircleInfo, Clock, Display, Globe, LayoutSideContentLeft, ListCheck, PencilToLine, PencilToSquare, Terminal, TrashBin, Xmark } from '@gravity-ui/icons'
+import { ArrowDownToLine, ArrowsRotateLeft, ArrowUpRightFromSquare, Bulb, Check, ChevronDown, CircleInfo, Clock, Display, Globe, LayoutSideContentLeft, ListCheck, PencilToLine, PencilToSquare, Terminal, TrashBin, Xmark } from '@gravity-ui/icons'
 import { toPng } from 'dom-to-image-more'
 import {
   Conversation,
@@ -51,7 +51,7 @@ import type {
   LocalCodingAgentConfig,
   LocalCodingAgentEvent,
 } from '@/types/electron'
-import { REASONING_EFFORT_OPTIONS, reasoningEffortLabel } from './agentPromptPresets'
+import { AgentReasoningEffortControl } from './AgentReasoningEffortControl'
 import {
   AgentPromptPrimaryAction,
   AgentToolApprovalPolicyDropdown,
@@ -99,7 +99,7 @@ import {
 import { UsageDetailsModal, formatTokenCount } from './AgentUsageStats'
 import { AgentShareCard, buildAgentSharePreviewData, formatAgentShareFileDate, sanitizeAgentShareFileName, type AgentSharePreviewData } from './AgentShareCard'
 import { AGENT_PENDING_TITLE, ModelWaitingLine, SubAgentProgressPanel, mergeSubAgentProgress, shouldDisplayAgentProgress } from './AgentSubAgentProgress'
-import { ModelItem, type AgentModelItem } from './AgentMessageBlocks'
+import { ModelCapabilityIcons, ModelItem, type AgentModelItem } from './AgentMessageBlocks'
 import { AgentMessageItem } from './AgentMessageItem'
 import { AgentRecordsMenu } from './AgentRecordsMenu'
 import {
@@ -234,11 +234,28 @@ function localAgentModelId(agentId: string): string {
   return `${LOCAL_AGENT_MODEL_ID_PREFIX}${agentId}`
 }
 
+// 自定义服务商 /models 端点只回模型 id 时的兜底详情：能力元数据未知，按支持工具对待（否则会被整列禁用）
+function toBasicModelDetail(id: string, providerId: string): AIModelInfo {
+  return {
+    id,
+    name: id,
+    providerId,
+    modalities: { input: ['text'], output: ['text'] },
+    capabilities: { attachment: false, reasoning: false, toolCall: true, structuredOutput: false, temperature: true, openWeights: false },
+    limits: {},
+  }
+}
+
 export default function AgentPage() {
   const [presets, setPresets] = useState<configService.AiConfigPreset[]>([])
   const [providersInfo, setProvidersInfo] = useState<AIProviderInfo[]>([])
   const [selectedPresetId, setSelectedPresetId] = useState('current')
-  const [reasoningEffort, setReasoningEffort] = useState<AgentReasoningEffort>('auto')
+  const [reasoningEffort, setReasoningEffort] = useState<AgentReasoningEffort>('high')
+  // 模型覆盖：在当前提供商（预设）下临时换用另一个模型；null = 用预设自带的模型
+  const [modelOverride, setModelOverride] = useState<string | null>(null)
+  // 各提供商条目实际拉到的模型列表（ai.listModels）：models.dev 没收录的自定义服务商打开菜单时自动拉，刷新按钮强制重拉
+  const [presetModels, setPresetModels] = useState<Record<string, AIModelInfo[]>>({})
+  const [presetModelsLoading, setPresetModelsLoading] = useState<Record<string, boolean>>({})
   const [generatedImagePreview, setGeneratedImagePreview] = useState<{ src: string; originRect?: ImagePreviewOriginRect } | null>(null)
   // 滚动到底部按钮液态玻璃：位移贴图就绪后给根容器加 .agent-glass-ready
   const [agentGlassReady, setAgentGlassReady] = useState(false)
@@ -459,33 +476,50 @@ export default function AgentPage() {
     }, ...list, ...localModels]
   }, [currentModelId, currentProviderConfig, currentProviderId, localAgentConfig, presets, modelInfoByKey])
   const chefs = useMemo(() => [...new Set(models.map((model) => model.chef))], [models])
-  const disabledModelKeys = useMemo(() => models.filter((model) => model.disabled).map((model) => model.id), [models])
   const selectedModelKeys = useMemo(() => new Set([selectedPresetId]), [selectedPresetId])
   const selectedModelData = models.find((model) => model.id === selectedPresetId)
   const selectedLocalAgentId = localAgentIdFromModelId(selectedPresetId)
-  const selectedModelSupportsTools = selectedModelData?.modelDetail
-    ? selectedModelData.modelDetail.capabilities.toolCall
-    : true
+  // 当前生效的提供商/模型（含覆盖）；模型详情优先取实拉列表（自定义服务商 catalog 里没有）
+  const effectiveProviderId = selectedPreset?.provider || currentProviderId
+  const effectiveModelId = modelOverride ?? (selectedPreset?.model || currentModelId)
+  const effectiveModelDetail =
+    presetModels[selectedPresetId]?.find((detail) => detail.id === effectiveModelId)
+    || modelInfoByKey.get(`${effectiveProviderId}::${effectiveModelId}`)
+    || modelInfoByKey.get(effectiveModelId)
+  const selectedModelSupportsTools = selectedLocalAgentId
+    ? true
+    : effectiveModelDetail
+      ? effectiveModelDetail.capabilities.toolCall
+      : true
   useEffect(() => {
     const selected = models.find((model) => model.id === selectedPresetId)
     const fallback = models.find((model) => !model.disabled)
     if (!selected) {
-      if (fallback) setSelectedPresetId(fallback.id)
+      if (fallback) {
+        setSelectedPresetId(fallback.id)
+        setModelOverride(null)
+      }
       return
     }
-    if (selected.disabled && fallback) setSelectedPresetId(fallback.id)
-  }, [models, selectedPresetId])
+    // 预设默认模型不支持工具、但用户已手动换过模型时不强制切走
+    if (selected.disabled && !modelOverride && fallback) {
+      setSelectedPresetId(fallback.id)
+      setModelOverride(null)
+    }
+  }, [models, selectedPresetId, modelOverride])
   const selectedModelConfig = useMemo<AgentModelConfig | null>(() => {
-    if (!selectedPreset) return { reasoningEffort }
+    if (!selectedPreset) {
+      return modelOverride ? { model: modelOverride, reasoningEffort } : { reasoningEffort }
+    }
     return {
       provider: selectedPreset.provider,
       apiKey: selectedPreset.apiKey,
-      model: selectedPreset.model,
+      model: modelOverride || selectedPreset.model,
       baseURL: selectedPreset.baseURL,
       protocol: selectedPreset.protocol,
       reasoningEffort,
     }
-  }, [selectedPreset, reasoningEffort])
+  }, [selectedPreset, reasoningEffort, modelOverride])
   const selectedModelConfigRef = useRef<AgentModelConfig | null>(null)
   selectedModelConfigRef.current = selectedModelConfig
 
@@ -2104,14 +2138,68 @@ export default function AgentPage() {
     const model = models.find((item) => item.id === id)
     if (!model || model.disabled) return
     setSelectedPresetId(id)
+    setModelOverride(null)
     setModelOpen(false)
   }, [models])
 
-  const handleReasoningEffortSelect = useCallback((value: string) => {
-    if (!REASONING_EFFORT_OPTIONS.some((option) => option.value === value)) return
-    setReasoningEffort(value as AgentReasoningEffort)
+  // 二级菜单选模型：切到该提供商（预设）并覆盖模型；选回预设自带模型时清覆盖
+  const handlePresetModelSelect = useCallback((presetId: string, modelId: string) => {
+    setSelectedPresetId(presetId)
+    const preset = presets.find((item) => item.id === presetId)
+    const baseModel = preset ? preset.model : currentModelId
+    setModelOverride(baseModel === modelId ? null : modelId)
     setModelOpen(false)
-  }, [])
+  }, [presets, currentModelId])
+
+  // 拉取某提供商条目的模型列表（'current' 条目用当前配置的凭据）
+  const fetchEntryModels = useCallback(async (entryId: string) => {
+    const preset = presets.find((item) => item.id === entryId)
+    const options = preset
+      ? { provider: preset.provider, apiKey: preset.apiKey, baseURL: preset.baseURL, protocol: preset.protocol }
+      : { provider: currentProviderId, apiKey: currentProviderConfig?.apiKey, baseURL: currentProviderConfig?.baseURL, protocol: currentProviderConfig?.protocol }
+    if (!options.provider) return
+    setPresetModelsLoading((state) => ({ ...state, [entryId]: true }))
+    try {
+      const res = await window.electronAPI.ai.listModels(options)
+      if (res.success) {
+        // 只回模型 id 时先去 models.dev 目录对（中转站常用 "vendor/model-id" 前缀，剥掉再试），
+        // 命中就借用目录的能力元数据/显示名，id 保留中转站原始值（实际请求要用它）
+        const matchCatalogDetail = (id: string): AIModelInfo | undefined => {
+          const bare = id.includes('/') ? id.slice(id.lastIndexOf('/') + 1) : id
+          return modelInfoByKey.get(id) || modelInfoByKey.get(bare)
+            || modelInfoByKey.get(id.toLowerCase()) || modelInfoByKey.get(bare.toLowerCase())
+        }
+        const details = res.modelDetails?.length
+          ? res.modelDetails
+          : (res.models || []).map((id) => {
+              const matched = matchCatalogDetail(id)
+              return matched ? { ...matched, id, providerId: options.provider } : toBasicModelDetail(id, options.provider)
+            })
+        setPresetModels((state) => ({ ...state, [entryId]: details }))
+      }
+    } catch {
+      // 拉取失败保留旧列表，用户可点刷新重试
+    } finally {
+      setPresetModelsLoading((state) => ({ ...state, [entryId]: false }))
+    }
+  }, [presets, currentProviderId, currentProviderConfig, modelInfoByKey])
+
+  // 条目的模型列表：实拉的优先，否则用 models.dev 目录
+  const entryModelDetails = useCallback((entry: AgentModelItem): AIModelInfo[] => {
+    return presetModels[entry.id] ?? (providersInfo.find((provider) => provider.id === entry.chefSlug)?.modelDetails || [])
+  }, [presetModels, providersInfo])
+
+  // 打开菜单时给 catalog 里查不到模型的条目（自定义服务商）自动拉一次
+  useEffect(() => {
+    if (!modelOpen) return
+    for (const entry of models) {
+      if (entry.kind === 'local-agent') continue
+      if (presetModels[entry.id] || presetModelsLoading[entry.id]) continue
+      const catalog = providersInfo.find((provider) => provider.id === entry.chefSlug)?.modelDetails || []
+      if (catalog.length > 0) continue
+      void fetchEntryModels(entry.id)
+    }
+  }, [modelOpen, models, presetModels, presetModelsLoading, providersInfo, fetchEntryModels])
 
   useEffect(() => {
     if (!conversationId || messages.length === 0) return
@@ -2553,6 +2641,7 @@ export default function AgentPage() {
               </PromptInputTools>
 
               <div className="flex items-center gap-2">
+                {/* 模型选择：一级列表是提供商（预设），二级列表是该提供商的模型；按钮只显示当前模型名 */}
                 <Dropdown isOpen={modelOpen} onOpenChange={setModelOpen}>
                   <HeroButton aria-label="选择模型" className="max-w-56" size="sm" variant="tertiary">
                     {selectedLocalAgentId ? (
@@ -2560,56 +2649,94 @@ export default function AgentPage() {
                     ) : selectedModelData?.chefSlug && (
                       <AIProviderLogo providerId={selectedModelData.chefSlug} alt={selectedModelData.chef} className="shrink-0" size={18} />
                     )}
-                    {selectedModelData?.name && (
-                      <span className="min-w-0 flex-1 truncate text-left">{selectedModelData.name}</span>
-                    )}
+                    <span className="min-w-0 flex-1 truncate text-left">
+                      {selectedLocalAgentId
+                        ? selectedModelData?.name
+                        : effectiveModelDetail?.name || effectiveModelId || selectedModelData?.name || '选择模型'}
+                    </span>
                     <ChevronDown className="size-3.5 shrink-0" />
                   </HeroButton>
-                  <Dropdown.Popover className="max-h-96 min-w-72 overflow-y-auto" placement="top end">
+                  <Dropdown.Popover className="min-w-72 overflow-hidden" placement="top end">
+                    {/* 高度限制加在 Menu 上（Popover 层不吃约束，同 PromptPresetButton 的做法），列表再长也不会顶到标题栏 */}
                     <Dropdown.Menu
-                      disabledKeys={disabledModelKeys}
+                      className="ct-agent-scrollbar max-h-[min(24rem,60vh)] overflow-y-auto"
                       selectedKeys={selectedModelKeys}
                       selectionMode="single"
                       onAction={(key) => handleModelSelect(String(key))}
                     >
-                      <Dropdown.SubmenuTrigger>
-                        <Dropdown.Item id="reasoning-effort" textValue="思考强度">
-                          <Bulb className="size-4 shrink-0 text-muted" />
-                          <Label className="min-w-0 flex-1 text-left">思考强度</Label>
-                          <span className="shrink-0 text-muted-foreground text-xs">
-                            {reasoningEffortLabel(reasoningEffort, true)}
-                          </span>
-                          <Dropdown.SubmenuIndicator />
-                        </Dropdown.Item>
-                        <Dropdown.Popover className="min-w-44" placement="right top">
-                          <Dropdown.Menu
-                            selectedKeys={new Set([reasoningEffort])}
-                            selectionMode="single"
-                            onAction={(key) => handleReasoningEffortSelect(String(key))}
-                          >
-                            {REASONING_EFFORT_OPTIONS.map((option) => (
-                              <Dropdown.Item id={option.value} key={option.value} textValue={option.label}>
-                                <Dropdown.ItemIndicator />
-                                <Label>{option.label}</Label>
-                              </Dropdown.Item>
-                            ))}
-                          </Dropdown.Menu>
-                        </Dropdown.Popover>
-                      </Dropdown.SubmenuTrigger>
-                      <Separator />
                       {chefs.map((chef) => (
                         <Dropdown.Section key={chef}>
                           <Header>{chef}</Header>
                           {models
                             .filter((model) => model.chef === chef)
-                            .map((model) => (
-                              <ModelItem key={model.id} model={model} />
-                            ))}
+                            .map((model) => {
+                              if (model.kind === 'local-agent') {
+                                return <ModelItem key={model.id} model={model} />
+                              }
+                              const details = entryModelDetails(model)
+                              const loading = !!presetModelsLoading[model.id]
+                              return (
+                                <Dropdown.SubmenuTrigger key={model.id}>
+                                  <Dropdown.Item id={model.id} textValue={model.name}>
+                                    <Dropdown.ItemIndicator />
+                                    {model.chefSlug && <AIProviderLogo providerId={model.chefSlug} alt={model.chef} className="shrink-0" size={20} />}
+                                    <Label className="min-w-0 flex-1 truncate text-left">{model.name}</Label>
+                                    <Dropdown.SubmenuIndicator />
+                                  </Dropdown.Item>
+                                  <Dropdown.Popover className="min-w-64 overflow-hidden" placement="right top">
+                                    <div className="flex items-center justify-between gap-2 border-border/70 border-b py-1 pr-1 pl-3">
+                                      <Label className="text-muted-foreground text-xs">
+                                        {loading ? '正在获取模型…' : `${details.length} 个模型`}
+                                      </Label>
+                                      <HeroButton
+                                        aria-label="刷新模型列表"
+                                        isDisabled={loading}
+                                        isIconOnly
+                                        size="sm"
+                                        variant="ghost"
+                                        onPress={() => void fetchEntryModels(model.id)}
+                                      >
+                                        <ArrowsRotateLeft className={`size-3.5 ${loading ? 'animate-spin' : ''}`} />
+                                      </HeroButton>
+                                    </div>
+                                    {details.length > 0 ? (
+                                      <Dropdown.Menu
+                                        className="ct-agent-scrollbar max-h-[min(20rem,55vh)] overflow-y-auto"
+                                        disabledKeys={details.filter((detail) => !detail.capabilities.toolCall).map((detail) => detail.id)}
+                                        selectedKeys={model.id === selectedPresetId ? new Set([effectiveModelId]) : new Set<string>()}
+                                        selectionMode="single"
+                                        onAction={(key) => handlePresetModelSelect(model.id, String(key))}
+                                      >
+                                        {details.map((detail) => (
+                                          <Dropdown.Item id={detail.id} key={detail.id} textValue={detail.name || detail.id}>
+                                            <Dropdown.ItemIndicator />
+                                            <Label className="min-w-0 flex-1 truncate text-left">{detail.name || detail.id}</Label>
+                                            <span className="ml-auto flex shrink-0 items-center gap-1.5">
+                                              <ModelCapabilityIcons detail={detail} />
+                                              {!detail.capabilities.toolCall && <span className="text-[10px] text-muted-foreground">无工具</span>}
+                                            </span>
+                                          </Dropdown.Item>
+                                        ))}
+                                      </Dropdown.Menu>
+                                    ) : (
+                                      <div className="px-3 py-4 text-center text-muted-foreground text-xs">
+                                        {loading ? '正在获取模型…' : '暂无模型，点右上角刷新获取'}
+                                      </div>
+                                    )}
+                                  </Dropdown.Popover>
+                                </Dropdown.SubmenuTrigger>
+                              )
+                            })}
                         </Dropdown.Section>
                       ))}
                     </Dropdown.Menu>
                   </Dropdown.Popover>
                 </Dropdown>
+
+                {/* 思考强度：六档离散滑杆，GPT-5.6 的 max 档在最右侧。 */}
+                {!selectedLocalAgentId && (
+                  <AgentReasoningEffortControl value={reasoningEffort} onChange={setReasoningEffort} />
+                )}
                 <ButtonGroup size="sm">
                   <AgentPromptPrimaryAction busy={effectiveBusy} status={effectiveStatus} workspaceReferenceCount={workspaceFileReferences.length} />
                 </ButtonGroup>

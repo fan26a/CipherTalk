@@ -88,39 +88,41 @@ export function buildPromptCacheKey(parts: AgentPromptParts, tools: ToolSet): st
   return `ciphertalk:agent:${shortHash(parts.cacheableSystem)}:${shortHash(stableToolSignature(tools))}`
 }
 
-function isReasoningEffortSet(effort?: AgentReasoningEffort): effort is Exclude<AgentReasoningEffort, 'auto'> {
-  return Boolean(effort && effort !== 'auto')
+function isReasoningEffortSet(effort?: AgentReasoningEffort): effort is AgentReasoningEffort {
+  return Boolean(effort)
 }
 
-export function buildReasoningOption(config: { reasoningEffort?: AgentReasoningEffort }): Exclude<AgentReasoningEffort, 'auto'> | undefined {
+export function buildReasoningOption(config: { reasoningEffort?: AgentReasoningEffort }): AgentReasoningEffort | undefined {
   return isReasoningEffortSet(config.reasoningEffort) ? config.reasoningEffort : undefined
 }
 
-function toAnthropicEffort(effort: Exclude<AgentReasoningEffort, 'auto'>): 'low' | 'medium' | 'high' {
-  if (effort === 'minimal') return 'low'
-  if (effort === 'xhigh') return 'high' // Anthropic 无 xhigh 档，封顶到 high
+function toAnthropicEffort(effort: AgentReasoningEffort): 'low' | 'medium' | 'high' {
+  if (effort === 'none') return 'low'
+  if (effort === 'xhigh' || effort === 'max') return 'high'
   return effort
 }
 
 function toGoogleThinkingConfig(
-  effort: Exclude<AgentReasoningEffort, 'auto'>,
+  effort: AgentReasoningEffort,
   model: string,
 ): Record<string, unknown> | undefined {
   const normalizedModel = model.toLowerCase()
   if (normalizedModel.includes('gemini-3')) {
-    // Gemini 3 的 thinkingLevel 只认 low/high，xhigh 封顶到 high
-    return { thinkingLevel: effort === 'xhigh' ? 'high' : effort, includeThoughts: true }
+    const thinkingLevel = effort === 'none' || effort === 'low' ? 'low' : 'high'
+    return { thinkingLevel, includeThoughts: true }
   }
   if (!normalizedModel.includes('gemini-2.5')) {
     return undefined
   }
 
-  const thinkingBudgetByEffort: Record<Exclude<AgentReasoningEffort, 'auto'>, number> = {
-    minimal: 1024,
+  const thinkingBudgetByEffort: Record<AgentReasoningEffort, number> = {
+    none: 1024,
     low: 2048,
     medium: 4096,
     high: 8192,
     xhigh: 16384,
+    // max 是 GPT-5.6 档位；Gemini 2.5 没有对应枚举，沿用当前最高预算。
+    max: 16384,
   }
   return { thinkingBudget: thinkingBudgetByEffort[effort], includeThoughts: true }
 }

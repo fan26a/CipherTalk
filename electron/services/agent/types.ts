@@ -25,7 +25,7 @@ export interface AgentProviderConfig {
   anthropicCacheTtl?: '5m' | '1h'
 }
 
-export type AgentReasoningEffort = 'auto' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
+export type AgentReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
 export interface AgentProviderConfigOverride {
   provider?: string
