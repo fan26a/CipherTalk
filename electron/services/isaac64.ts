@@ -24,7 +24,9 @@ export class Isaac64 {
 
     private init(flag: boolean) {
         let a: bigint, b: bigint, c: bigint, d: bigint, e: bigint, f: bigint, g: bigint, h: bigint;
-        a = b = c = d = e = f = g = h = 0x9e3779b97f4a7c15n;
+        // ISAAC64 参考实现的黄金比例常量结尾是 ...7c13（非数学上的 ...7c15）。
+        // 用 7c15 会生成与微信 WAS(WxIsaac64) 不一致的密钥流，解密全错。
+        a = b = c = d = e = f = g = h = 0x9e3779b97f4a7c13n;
 
         const mix = () => {
             a = (a - e) & Isaac64.MASK; f ^= (h >> 9n); h = (h + a) & Isaac64.MASK;
@@ -87,9 +89,11 @@ export class Isaac64 {
                 case 3: this.aa = (this.aa ^ (this.aa >> 33n)) & Isaac64.MASK; break;
             }
             this.aa = (this.mm[(i + 128) & 255] + this.aa) & Isaac64.MASK;
-            const y = (this.mm[Number(x >> 3n) & 255] + this.aa + this.bb) & Isaac64.MASK;
+            // 索引必须在 BigInt 里取低 8 位再转 Number：x>>3 常 > 2^53，
+            // 先 Number() 会丢低位（f64 尾数 52 位），导致索引错乱。
+            const y = (this.mm[Number((x >> 3n) & 0xffn)] + this.aa + this.bb) & Isaac64.MASK;
             this.mm[i] = y;
-            this.bb = (this.mm[Number(y >> 11n) & 255] + x) & Isaac64.MASK;
+            this.bb = (this.mm[Number((y >> 11n) & 0xffn)] + x) & Isaac64.MASK;
             this.randrsl[i] = this.bb;
         }
     }

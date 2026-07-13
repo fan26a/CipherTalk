@@ -95,6 +95,20 @@ export interface SnsPost {
     rawXml?: string
 }
 
+type SnsTimelineRow = Partial<Omit<SnsPost, 'createTime' | 'type'>> & {
+    content?: string
+    xml?: string
+    user_name?: string
+    userName?: string
+    createTime?: number | string
+    create_time?: number | string
+    content_desc?: string
+    snsId?: string
+    sns_id?: string
+    tid?: string | number
+    type?: number | string
+}
+
 const fixSnsUrl = (url: string, token?: string, isVideo: boolean = false) => {
     if (!url) return url
 
@@ -1200,7 +1214,7 @@ class SnsService {
         })
     }
 
-    private async normalizeTimelineRow(row: any): Promise<SnsPost> {
+    private async normalizeTimelineRow(row: SnsTimelineRow): Promise<SnsPost> {
         const xmlContent = String(row.rawXml || row.content || row.xml || '')
         const username = String(row.username || row.user_name || row.userName || '')
         const contact = username ? await chatService.getContact(username) : null
@@ -1280,7 +1294,7 @@ class SnsService {
         sql += ' ORDER BY tid DESC LIMIT ? OFFSET ?'
         params.push(limit, offset)
 
-        const rows = await dbAdapter.all<any>('sns', '', sql, params)
+        const rows = await dbAdapter.all<SnsTimelineRow>('sns', '', sql, params)
         return Promise.all(rows.map((row) => this.normalizeTimelineRow(row)))
     }
 
@@ -1295,7 +1309,7 @@ class SnsService {
                         : Array.isArray((nativeResult.timeline as any).items)
                             ? (nativeResult.timeline as any).items
                             : []
-                const timeline = await Promise.all(nativeRows.map((row) => this.normalizeTimelineRow(row)))
+                const timeline = await Promise.all(nativeRows.map((row: SnsTimelineRow) => this.normalizeTimelineRow(row)))
                 return { success: true, timeline }
             }
 
@@ -1404,15 +1418,10 @@ class SnsService {
                                             // 只需要前 128KB (131072 bytes) 用于解密头部
                                             keystream = await wasmService.getKeystream(keyText, 131072)
                                         } catch (wasmErr) {
-                                            // 打包漏带 wasm 或 wasm 初始化异常时，回退到纯 TS ISAAC64
+                                            // 打包漏带 wasm 或 wasm 初始化异常时，回退到纯 TS ISAAC64。
+                                            // generateKeystreamBE(len) 已等于 WASM getKeystream(len)，直接用，不 align 不 reverse。
                                             const isaac = new Isaac64(keyText)
-
-                                            // 对齐到 8 字节，然后 reverse
-                                            const alignSize = Math.ceil(131072 / 8) * 8
-                                            const alignedKeystream = isaac.generateKeystreamBE(alignSize)
-                                            const reversed = Buffer.from(alignedKeystream)
-                                            reversed.reverse()
-                                            keystream = reversed.subarray(0, 131072)
+                                            keystream = isaac.generateKeystreamBE(131072)
                                         }
 
                                         const decryptLen = Math.min(keystream.length, raw.length)
@@ -1513,19 +1522,10 @@ class SnsService {
                                         const wasmService = WasmService.getInstance()
                                         keystream = await wasmService.getKeystream(keyStr, raw.length)
                                     } catch (wasmErr) {
-                                        // Fallback：使用纯 TypeScript 的 Isaac64
+                                        // Fallback：纯 TS Isaac64。generateKeystreamBE(len) 已等于
+                                        // WASM getKeystream(len)，直接用，不 align 不 reverse。
                                         const isaac = new Isaac64(keyStr)
-
-                                        // 需要对齐到 8 字节边界，然后 reverse，和 WASM 版本保持一致
-                                        const alignSize = Math.ceil(raw.length / 8) * 8
-                                        const alignedKeystream = isaac.generateKeystreamBE(alignSize)
-
-                                        // Reverse 整个 buffer
-                                        const reversed = Buffer.from(alignedKeystream)
-                                        reversed.reverse()
-
-                                        // 取前 raw.length 字节
-                                        keystream = reversed.subarray(0, raw.length)
+                                        keystream = isaac.generateKeystreamBE(raw.length)
                                     }
 
                                     const decrypted = Buffer.allocUnsafe(raw.length)
