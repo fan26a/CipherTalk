@@ -3,9 +3,10 @@
  * 从 AgentPage.tsx 拆出，供主组件和 AgentSubAgentProgress 等复用。
  */
 import { Tooltip } from '@heroui/react'
-import { QuoteOpen } from '@gravity-ui/icons'
+import { ArrowUpRightFromSquare, FileText, Globe, QuoteOpen } from '@gravity-ui/icons'
+import { useState } from 'react'
 import { isToolUIPart, type UIMessage } from 'ai'
-import { Sources, SourcesContent, SourcesTrigger } from '@/components/ai-elements/sources'
+import { Source, Sources, SourcesContent, SourcesTrigger } from '@/components/ai-elements/sources'
 import { Shimmer } from '@/components/ai-elements/shimmer'
 
 // ====== 计划模式控制标记 ======
@@ -27,6 +28,7 @@ export const TOOL_LABELS: Record<string, string> = {
   semantic_search: '语义检索聊天记录',
   get_context: '查看上下文',
   get_timeline: '查看时间线',
+  transcribe_voice_message: '转写语音消息',
   chat_stats: '聊天统计',
   list_groups: '查看群聊列表',
   group_members: '查看群成员',
@@ -53,6 +55,7 @@ export const TOOL_LABELS: Record<string, string> = {
   search_moments: '搜索朋友圈',
   moments_stats: '朋友圈统计',
   web_search: '联网搜索',
+  google_search: '联网搜索',
   generate_image: '生成图片',
   search_moment_media: '找朋友圈图片',
   search_media: '找历史媒体',
@@ -107,6 +110,46 @@ export function formatToolName(toolName: string) {
     return `MCP: ${server}/${tool}`
   }
   return TOOL_LABELS[toolName] ?? toolName.replace(/[_-]+/g, ' ')
+}
+
+const COMMAND_TOOL_NAMES = new Set(['code_run_command', 'run_command'])
+
+export function isCommandTool(toolName: string) {
+  return COMMAND_TOOL_NAMES.has(toolName)
+}
+
+function formatCommandArg(value: unknown) {
+  const text = String(value)
+  return !text || /[\s"']/.test(text) ? JSON.stringify(text) : text
+}
+
+function commandTextFrom(value: unknown): string {
+  if (typeof value === 'string') return value.trim()
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return ''
+  const record = value as Record<string, unknown>
+  const commandLine = typeof record.commandLine === 'string' ? record.commandLine.trim() : ''
+  if (commandLine) return commandLine
+  const command = typeof record.command === 'string' ? record.command.trim() : ''
+  if (!command) return ''
+  const args = Array.isArray(record.args) ? record.args.map(formatCommandArg) : []
+  return [command, ...args].join(' ')
+}
+
+function commandOutputFailed(output: unknown) {
+  if (!output || typeof output !== 'object' || Array.isArray(output)) return false
+  const record = output as Record<string, unknown>
+  if (record.success === false) return true
+  const status = typeof record.status === 'string' ? record.status.toLowerCase() : ''
+  return ['failed', 'error', 'timed_out', 'cancelled', 'canceled'].includes(status)
+}
+
+export function formatToolStepLabel(toolName: string, state: string | undefined, input?: unknown, output?: unknown) {
+  if (!isCommandTool(toolName)) return formatToolName(toolName)
+  const command = commandTextFrom(input) || commandTextFrom(output)
+  const failed = state === 'output-error' || commandOutputFailed(output)
+  const done = state === 'output-available'
+  const prefix = failed ? '运行失败' : done ? '已运行' : '正在运行'
+  return command ? `${prefix} ${command}` : `${prefix}命令`
 }
 
 // ====== 工具审批一行动态说明（输入框上方审批条用）======
@@ -294,6 +337,129 @@ export function collectRetrievalBadges(toolName: string, output: unknown): strin
 // collectToolBadges 目前只在检索徽标之外的历史工具展示里可能用到，保留导出以防未来复用。
 export { collectToolBadges }
 
+// ====== 模型厂商来源（AI SDK source-url / source-document）======
+export type ProviderSourceItem =
+  | { kind: 'url'; id: string; url: string; title: string; host: string }
+  | { kind: 'document'; id: string; title: string; mediaType: string; filename?: string }
+
+function normalizeProviderSourceUrl(value: unknown): { url: string; host: string } | null {
+  const raw = String(value || '').trim()
+  if (!raw) return null
+  try {
+    const parsed = new URL(raw.startsWith('//') ? `https:${raw}` : raw)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null
+    return {
+      url: parsed.href,
+      host: parsed.hostname.replace(/^www\./i, '') || parsed.host,
+    }
+  } catch {
+    return null
+  }
+}
+
+/** 提取 provider 原生搜索、网页抓取或文件检索返回的结构化来源。 */
+export function extractProviderSources(parts: UIMessage['parts']): ProviderSourceItem[] {
+  const items: ProviderSourceItem[] = []
+  const seen = new Set<string>()
+  for (const part of parts) {
+    if (part.type === 'source-url') {
+      const normalized = normalizeProviderSourceUrl(part.url)
+      if (!normalized || seen.has(`url:${normalized.url}`)) continue
+      seen.add(`url:${normalized.url}`)
+      items.push({
+        kind: 'url',
+        id: String(part.sourceId || normalized.url),
+        url: normalized.url,
+        title: String(part.title || '').trim() || normalized.host,
+        host: normalized.host,
+      })
+      continue
+    }
+    if (part.type === 'source-document') {
+      const title = String(part.title || part.filename || '').trim() || '引用文档'
+      const identity = `document:${String(part.sourceId || `${title}:${part.mediaType}`)}`
+      if (seen.has(identity)) continue
+      seen.add(identity)
+      items.push({
+        kind: 'document',
+        id: String(part.sourceId || identity),
+        title,
+        mediaType: String(part.mediaType || 'document'),
+        ...(part.filename ? { filename: String(part.filename) } : {}),
+      })
+    }
+  }
+  return items.slice(0, 20)
+}
+
+function ProviderSourceIcon({ item }: { item: ProviderSourceItem }) {
+  const [faviconFailed, setFaviconFailed] = useState(false)
+  if (item.kind === 'document') return <FileText className="size-3.5" />
+  if (faviconFailed) return <Globe className="size-3.5" />
+  return (
+    <img
+      alt=""
+      className="size-3.5 object-contain"
+      onError={() => setFaviconFailed(true)}
+      src={`${new URL(item.url).origin}/favicon.ico`}
+    />
+  )
+}
+
+export function MessageProviderSources({ items }: { items: ProviderSourceItem[] }) {
+  if (items.length === 0) return null
+  const primaryUrl = items.find((item): item is Extract<ProviderSourceItem, { kind: 'url' }> => item.kind === 'url')
+  const remainingCount = Math.max(0, items.length - 1)
+  return (
+    <div className="not-prose my-2 flex w-full max-w-xl items-center gap-2 overflow-x-auto py-0.5 text-muted-foreground text-xs">
+      <span aria-label={`${items.length} 个在线来源`} className="flex shrink-0 items-center">
+        {items.map((item, index) => {
+          const iconClassName = `relative inline-flex size-5 shrink-0 items-center justify-center overflow-hidden rounded-[5px] border border-background bg-surface text-muted-foreground shadow-xs transition-transform hover:z-30 hover:-translate-y-0.5 ${index > 0 ? '-ml-2.5' : ''}`
+          const tooltipText = item.kind === 'url' ? item.host : (item.filename || item.mediaType)
+          return (
+            <Tooltip closeDelay={80} delay={120} key={`provider-source-icon-${item.id}`}>
+              <Tooltip.Trigger>
+                {item.kind === 'url' ? (
+                  <Source
+                    aria-label={`打开来源：${item.title}`}
+                    className={iconClassName}
+                    href={item.url}
+                  >
+                    <ProviderSourceIcon item={item} />
+                  </Source>
+                ) : (
+                  <span className={iconClassName}>
+                    <ProviderSourceIcon item={item} />
+                  </span>
+                )}
+              </Tooltip.Trigger>
+              <Tooltip.Content className="max-w-72" placement="top start">
+                <div className="truncate font-medium text-xs">{item.title}</div>
+                <div className="truncate text-[11px] text-muted">{tooltipText}</div>
+              </Tooltip.Content>
+            </Tooltip>
+          )
+        })}
+      </span>
+      <span className="shrink-0 font-medium">在线来源</span>
+      <span aria-hidden="true" className="shrink-0 text-muted-foreground/45">·</span>
+      {primaryUrl ? (
+        <Source
+          aria-label={`打开来源：${primaryUrl.title}`}
+          className="group flex min-w-0 items-center gap-1 text-foreground no-underline hover:underline"
+          href={primaryUrl.url}
+        >
+          <span className="max-w-64 truncate">{primaryUrl.title}</span>
+          <ArrowUpRightFromSquare className="size-3.5 shrink-0 text-muted-foreground transition-colors group-hover:text-foreground" />
+        </Source>
+      ) : (
+        <span className="min-w-0 max-w-64 truncate text-foreground">{items[0].title}</span>
+      )}
+      {remainingCount > 0 && <span className="shrink-0 text-muted-foreground">+{remainingCount}</span>}
+    </div>
+  )
+}
+
 // ====== 出处（让用户能核对答案来源）======
 export type SourceItem = { id: string; sessionId: string; localId?: number; time?: string; sender?: string; text: string }
 
@@ -353,7 +519,7 @@ export function MessageSources({
     <Sources>
       <SourcesTrigger count={items.length}>
         <QuoteOpen className="size-3.5" />
-        <span className="font-medium">出处 {items.length} 条</span>
+        <span className="font-medium">聊天出处 {items.length} 条</span>
       </SourcesTrigger>
       <SourcesContent className="w-full flex-row flex-wrap gap-1.5">
         {items.map((it, index) => {

@@ -19,6 +19,7 @@ const DEFAULT_TOOL_TIMEOUT_MS = 60_000
 const TOOL_TIMEOUT_OVERRIDES: Record<string, number> = {
   semantic_search: 240_000,
   search_messages: 240_000,
+  transcribe_voice_message: 600_000, // 本地大模型首次加载或在线转写可能耗时较长
   delegate_analysis: 600_000, // 子 Agent 批量整轮（最多 4 个并发子任务 + 可能触发首次重建），给更长上限
   search_stickers: 240_000, // 首次构建表情包词典可能触发最近会话补建索引
   search_media: 240_000, // 首次搜索历史媒体可能触发最近会话补建索引
@@ -75,14 +76,17 @@ function stepFingerprint(step: StepResult<ToolSet>): string | null {
     .join('|')
 }
 
+/** 最近连续步骤是否陷入相同工具调用；引擎可据此保留一个禁用工具的最终答复步骤。 */
+export function hasRepeatedToolCallLoop(steps: StepResult<ToolSet>[]): boolean {
+  if (steps.length < MAX_IDENTICAL_TOOL_REPEATS) return false
+  const recent = steps.slice(-MAX_IDENTICAL_TOOL_REPEATS).map(stepFingerprint)
+  const first = recent[0]
+  return first !== null && recent.every((fingerprint) => fingerprint === first)
+}
+
 /** 死循环检测：最近 N 步工具调用指纹完全相同（且非空）→ 停止。 */
 export function loopGuardCondition(): StopCondition<ToolSet> {
-  return ({ steps }) => {
-    if (steps.length < MAX_IDENTICAL_TOOL_REPEATS) return false
-    const recent = steps.slice(-MAX_IDENTICAL_TOOL_REPEATS).map(stepFingerprint)
-    const first = recent[0]
-    return first !== null && recent.every((fp) => fp === first)
-  }
+  return ({ steps }) => hasRepeatedToolCallLoop(steps)
 }
 
 /** 给每个工具的 execute 套超时，超时返回 {error}（不抛、不挂住循环）。 */

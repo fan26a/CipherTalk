@@ -124,7 +124,7 @@ export interface AIProvider {
   /**
    * 测试连接
    */
-  testConnection(): Promise<{ success: boolean; error?: string; needsProxy?: boolean }>
+  testConnection(model?: string): Promise<{ success: boolean; error?: string; needsProxy?: boolean }>
 
   /**
    * 拉取服务商当前可用模型列表
@@ -303,7 +303,7 @@ function normalizeBaseURL(baseURL: string): string {
   return String(baseURL || '').trim().replace(/\/+$/, '')
 }
 
-function joinEndpoint(baseURL: string, path: string): string {
+export function joinEndpoint(baseURL: string, path: string): string {
   const normalized = normalizeBaseURL(baseURL)
   return `${normalized}${path.startsWith('/') ? path : `/${path}`}`
 }
@@ -784,12 +784,22 @@ export abstract class BaseAIProvider implements AIProvider {
     }
   }
 
-  async testConnection(): Promise<{ success: boolean; error?: string; needsProxy?: boolean }> {
+  async testConnection(model?: string): Promise<{ success: boolean; error?: string; needsProxy?: boolean }> {
     try {
-      await this.listModels()
+      const requestedModel = this.getRequestedModel({ model })
+      const modelProvider = this.getModelProvider(requestedModel)
+      await generateText({
+        model: modelProvider,
+        messages: [{ role: 'user', content: 'Hello' }],
+        maxOutputTokens: 16,
+        timeout: 30000,
+        maxRetries: 0,
+        telemetry: { functionId: 'provider-connection-test' }
+      })
       return { success: true }
     } catch (error: any) {
       const errorMessage = error?.message || String(error)
+      const status = Number(error?.statusCode ?? error?.status)
       console.error(`[${this.name}] 连接测试失败:`, errorMessage)
 
       const needsProxy =
@@ -797,15 +807,16 @@ export abstract class BaseAIProvider implements AIProvider {
         errorMessage.includes('ETIMEDOUT') ||
         errorMessage.includes('ENOTFOUND') ||
         errorMessage.includes('CONNECTION_TIMEOUT') ||
-        errorMessage.includes('MODEL_LIST_TIMEOUT') ||
+        errorMessage.includes('fetch failed') ||
         errorMessage.includes('getaddrinfo') ||
+        /timeout|timed out|abort/i.test(errorMessage) ||
         error?.code === 'ECONNREFUSED' ||
         error?.code === 'ETIMEDOUT' ||
         error?.code === 'ENOTFOUND'
 
       let errorMsg = '连接失败'
 
-      if (errorMessage.includes('MODEL_LIST_TIMEOUT') || errorMessage.includes('CONNECTION_TIMEOUT')) {
+      if (status === 408 || errorMessage.includes('CONNECTION_TIMEOUT') || /timeout|timed out|abort/i.test(errorMessage)) {
         errorMsg = '连接超时，请开启代理或检查网络'
       } else if (errorMessage.includes('ECONNREFUSED')) {
         errorMsg = '连接被拒绝，请开启代理或检查网络'
@@ -813,13 +824,17 @@ export abstract class BaseAIProvider implements AIProvider {
         errorMsg = '连接超时，请开启代理或检查网络'
       } else if (errorMessage.includes('ENOTFOUND') || errorMessage.includes('getaddrinfo')) {
         errorMsg = '无法解析域名，请开启代理或检查网络'
-      } else if (errorMessage.includes('401') || errorMessage.includes('Unauthorized')) {
+      } else if (status === 401 || errorMessage.includes('401') || errorMessage.includes('Unauthorized')) {
         errorMsg = 'API Key 无效，请检查配置'
-      } else if (errorMessage.includes('403') || errorMessage.includes('Forbidden')) {
+      } else if (status === 402 || errorMessage.includes('402')) {
+        errorMsg = '账户余额或额度不足'
+      } else if (status === 403 || errorMessage.includes('403') || errorMessage.includes('Forbidden')) {
         errorMsg = '访问被禁止，请检查 API Key 权限'
-      } else if (errorMessage.includes('429')) {
+      } else if (status === 404 || errorMessage.includes('404')) {
+        errorMsg = '模型或接口不存在，请检查模型名称和服务地址'
+      } else if (status === 429 || errorMessage.includes('429')) {
         errorMsg = '请求过于频繁，请稍后再试'
-      } else if (errorMessage.includes('500') || errorMessage.includes('502') || errorMessage.includes('503')) {
+      } else if ([500, 502, 503].includes(status) || errorMessage.includes('500') || errorMessage.includes('502') || errorMessage.includes('503')) {
         errorMsg = '服务器错误，请稍后再试'
       } else if (needsProxy) {
         errorMsg = '网络连接失败，请开启代理或检查网络'

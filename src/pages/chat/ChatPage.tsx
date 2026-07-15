@@ -1208,7 +1208,7 @@ function ChatPage(_props: ChatPageProps) {
       const prepared = await Promise.all(batch.map(async (message) => {
         try {
           const [cached, voiceFile] = await Promise.all([
-            window.electronAPI.stt.getCachedTranscript(session.username, message.createTime),
+            window.electronAPI.stt.getCachedTranscript(session.username, message.createTime, message.localId),
             window.electronAPI.chat.ensureVoiceFile(
               session.username,
               String(message.localId),
@@ -1286,7 +1286,8 @@ function ChatPage(_props: ChatPageProps) {
               localPath,
               session.username,
               message.createTime,
-              false
+              false,
+              message.localId
             )
           } catch {
             return { success: false }

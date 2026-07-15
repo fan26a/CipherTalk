@@ -562,6 +562,7 @@ export class CatalogAIProvider extends BaseAIProvider {
     if (!secretId || !secretKey) return undefined
     return { Authorization: `Bearer ${secretId};${secretKey}` }
   }
+
 }
 
 export async function getModelsDevModels(providerId: string): Promise<string[]> {

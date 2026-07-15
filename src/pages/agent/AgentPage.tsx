@@ -7,7 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import { useChat } from '@ai-sdk/react'
 import { isToolUIPart, lastAssistantMessageIsCompleteWithApprovalResponses, type ChatStatus, type UIMessage } from 'ai'
 import { AlertDialog, Button as HeroButton, ButtonGroup, Dropdown, Header, Label, Modal, SearchField, Separator, Spinner, Surface, Switch, Toolbar, Tooltip, toast } from '@heroui/react'
-import { ArrowDownToLine, ArrowsRotateLeft, ArrowUpRightFromSquare, Bulb, Check, ChevronDown, CircleInfo, Clock, Display, Globe, LayoutSideContentLeft, ListCheck, PencilToLine, PencilToSquare, Terminal, TrashBin, Xmark } from '@gravity-ui/icons'
+import { ArrowDownToLine, ArrowsRotateLeft, ArrowUpRightFromSquare, Bulb, Check, ChevronDown, CircleInfo, Clock, Display, LayoutSideContentLeft, ListCheck, PencilToLine, PencilToSquare, Terminal, TrashBin, Xmark } from '@gravity-ui/icons'
 import { toPng } from 'dom-to-image-more'
 import {
   Conversation,
@@ -253,9 +253,10 @@ export default function AgentPage() {
   const [reasoningEffort, setReasoningEffort] = useState<AgentReasoningEffort>('high')
   // 模型覆盖：在当前提供商（预设）下临时换用另一个模型；null = 用预设自带的模型
   const [modelOverride, setModelOverride] = useState<string | null>(null)
-  // 各提供商条目实际拉到的模型列表（ai.listModels）：models.dev 没收录的自定义服务商打开菜单时自动拉，刷新按钮强制重拉
+  // 各提供商条目实际拉到的模型列表（ai.listModels）：models.dev 没收录的自定义服务商悬停时按需拉取，刷新按钮强制重拉
   const [presetModels, setPresetModels] = useState<Record<string, AIModelInfo[]>>({})
   const [presetModelsLoading, setPresetModelsLoading] = useState<Record<string, boolean>>({})
+  const presetModelsInFlightRef = useRef(new Set<string>())
   const [generatedImagePreview, setGeneratedImagePreview] = useState<{ src: string; originRect?: ImagePreviewOriginRect } | null>(null)
   // 滚动到底部按钮液态玻璃：位移贴图就绪后给根容器加 .agent-glass-ready
   const [agentGlassReady, setAgentGlassReady] = useState(false)
@@ -266,33 +267,6 @@ export default function AgentPage() {
   planModeRef.current = planMode
   // 标记当前在途的这次运行是否为计划模式（finish 前 metadata 还没回来，流式期间靠它判定计划卡片）
   const runIsPlanRef = useRef(false)
-  // 联网搜索（Tavily）：全局开关，存在 config，模型自己决定何时联网；+ 菜单里快捷开关
-  const [webSearchOn, setWebSearchOn] = useState(false)
-  const [webSearchHasKey, setWebSearchHasKey] = useState(false)
-  useEffect(() => {
-    void window.electronAPI.webSearch?.getConfig().then((res) => {
-      if (res.success && res.config) {
-        const cfg = res.config as { enabled?: boolean; apiKey?: string }
-        setWebSearchOn(Boolean(cfg.enabled))
-        setWebSearchHasKey(Boolean(cfg.apiKey))
-      }
-    })
-  }, [])
-  const toggleWebSearch = useCallback(async () => {
-    const next = !webSearchOn
-    if (next) {
-      // 重新读一遍配置，避免本次会话内刚在设置里填了 key 但缓存还是“无 key”
-      const res = await window.electronAPI.webSearch?.getConfig()
-      const hasKey = res?.success ? Boolean((res.config as { apiKey?: string } | undefined)?.apiKey) : webSearchHasKey
-      setWebSearchHasKey(hasKey)
-      if (!hasKey) {
-        setAgentNotice('请先在 设置 → AI 接入 → 联网 里填写 Tavily API Key，再开启联网搜索。')
-        return
-      }
-    }
-    setWebSearchOn(next)
-    void window.electronAPI.webSearch?.setConfig({ enabled: next })
-  }, [webSearchOn, webSearchHasKey])
   const [agentToolApprovalPolicy, setAgentToolApprovalPolicy] = useState<AgentToolApprovalPolicy>('on-request')
   useEffect(() => {
     void window.electronAPI.config.get('agentToolApprovalPolicy').then((value) => {
@@ -1645,7 +1619,6 @@ export default function AgentPage() {
           `模型：${selectedModelData?.name || '未选择'}`,
           `工作区：${workspace ? displayBasename(workspace.root) : '未选择'}`,
           `开发服务器：${devServer?.running ? (devServer.previewUrl || devServer.command || '运行中') : '未运行'}`,
-          `联网搜索：${webSearchOn ? '已开启' : '未开启'}`,
           `计划模式：${planMode ? '已开启' : '未开启'}`,
           tokenLine,
         ].join('\n'))
@@ -1711,23 +1684,12 @@ export default function AgentPage() {
       icon: Bulb,
       action: () => setModelOpen(true),
     },
-    {
-      id: 'search',
-      commands: ['/search'],
-      aliases: ['web', '联网', '搜索'],
-      label: webSearchOn ? '关闭联网搜索' : '开启联网搜索',
-      description: '切换 Tavily 联网搜索工具',
-      icon: Globe,
-      action: () => toggleWebSearch(),
-    },
   ], [
     codeWorkspaceState,
     conversationUsage,
     handleNewConversation,
     planMode,
     selectedModelData,
-    toggleWebSearch,
-    webSearchOn,
   ])
 
   const slashCommandByName = useMemo(() => {
@@ -2105,7 +2067,8 @@ export default function AgentPage() {
     const options = preset
       ? { provider: preset.provider, apiKey: preset.apiKey, baseURL: preset.baseURL, protocol: preset.protocol }
       : { provider: currentProviderId, apiKey: currentProviderConfig?.apiKey, baseURL: currentProviderConfig?.baseURL, protocol: currentProviderConfig?.protocol }
-    if (!options.provider) return
+    if (!options.provider || presetModelsInFlightRef.current.has(entryId)) return
+    presetModelsInFlightRef.current.add(entryId)
     setPresetModelsLoading((state) => ({ ...state, [entryId]: true }))
     try {
       const res = await window.electronAPI.ai.listModels(options)
@@ -2128,6 +2091,7 @@ export default function AgentPage() {
     } catch {
       // 拉取失败保留旧列表，用户可点刷新重试
     } finally {
+      presetModelsInFlightRef.current.delete(entryId)
       setPresetModelsLoading((state) => ({ ...state, [entryId]: false }))
     }
   }, [presets, currentProviderId, currentProviderConfig, modelInfoByKey])
@@ -2137,17 +2101,14 @@ export default function AgentPage() {
     return presetModels[entry.id] ?? (providersInfo.find((provider) => provider.id === entry.chefSlug)?.modelDetails || [])
   }, [presetModels, providersInfo])
 
-  // 打开菜单时给 catalog 里查不到模型的条目（自定义服务商）自动拉一次
-  useEffect(() => {
-    if (!modelOpen) return
-    for (const entry of models) {
-      if (entry.kind === 'local-agent') continue
-      if (presetModels[entry.id] || presetModelsLoading[entry.id]) continue
-      const catalog = providersInfo.find((provider) => provider.id === entry.chefSlug)?.modelDetails || []
-      if (catalog.length > 0) continue
-      void fetchEntryModels(entry.id)
-    }
-  }, [modelOpen, models, presetModels, presetModelsLoading, providersInfo, fetchEntryModels])
+  // 只在用户悬停、准备展开某个提供商时拉取；打开一级菜单本身不会发模型列表请求。
+  const ensureEntryModels = useCallback((entry: AgentModelItem) => {
+    if (entry.kind === 'local-agent') return
+    if (presetModels[entry.id] || presetModelsLoading[entry.id]) return
+    const catalog = providersInfo.find((provider) => provider.id === entry.chefSlug)?.modelDetails || []
+    if (catalog.length > 0) return
+    void fetchEntryModels(entry.id)
+  }, [fetchEntryModels, presetModels, presetModelsLoading, providersInfo])
 
   useEffect(() => {
     if (!conversationId || messages.length === 0) return
@@ -2534,21 +2495,6 @@ export default function AgentPage() {
                           </Switch>
                         </span>
                       </Dropdown.Item>
-                      <Dropdown.Item
-                        id="web-search"
-                        textValue="联网搜索"
-                        onAction={toggleWebSearch}
-                      >
-                        <Globe className="size-4 shrink-0 text-muted" />
-                        <Label>联网搜索</Label>
-                        <span className="ml-auto inline-flex pointer-events-none">
-                          <Switch aria-label="联网搜索" isSelected={webSearchOn}>
-                            <Switch.Control>
-                              <Switch.Thumb />
-                            </Switch.Control>
-                          </Switch>
-                        </span>
-                      </Dropdown.Item>
                     </PromptInputActionMenuContent>
                   </PromptInputActionMenu>
                   <PromptPresetButton showGroupSeparator />
@@ -2573,20 +2519,6 @@ export default function AgentPage() {
                   </HeroButton>
                 )}
 
-                {webSearchOn && (
-                  <HeroButton
-                    aria-label="关闭联网搜索"
-                    className="gap-1"
-                    onPress={toggleWebSearch}
-                    size="sm"
-                    variant="secondary"
-                  >
-                    <Globe className="size-3.5" />
-                    联网搜索
-                    <Xmark className="size-3" />
-                  </HeroButton>
-                )}
-
                 <AgentToolApprovalPolicyDropdown
                   policy={agentToolApprovalPolicy}
                   onChange={handleAgentToolApprovalPolicyChange}
@@ -2594,9 +2526,15 @@ export default function AgentPage() {
               </PromptInputTools>
 
               <div className="flex items-center gap-2">
-                {/* 模型选择：一级列表是提供商（预设），二级列表是该提供商的模型；按钮只显示当前模型名 */}
-                <Dropdown isOpen={modelOpen} onOpenChange={setModelOpen}>
-                  <HeroButton aria-label="选择模型" className="max-w-56" size="sm" variant="tertiary">
+                <div className="flex items-center gap-0.5">
+                  {/* 模型选择：一级列表是提供商（预设），二级列表是该提供商的模型；按钮只显示当前模型名 */}
+                  <Dropdown isOpen={modelOpen} onOpenChange={setModelOpen}>
+                  <HeroButton
+                    aria-label="选择模型"
+                    className="ct-agent-trigger-button max-w-56 pr-1.5"
+                    size="sm"
+                    variant="ghost"
+                  >
                     {selectedLocalAgentId ? (
                       <Terminal className="size-4 shrink-0 text-muted" />
                     ) : selectedModelData?.chefSlug && (
@@ -2630,8 +2568,16 @@ export default function AgentPage() {
                               const loading = !!presetModelsLoading[model.id]
                               return (
                                 <Dropdown.SubmenuTrigger key={model.id}>
-                                  <Dropdown.Item id={model.id} textValue={model.name}>
-                                    <Dropdown.ItemIndicator />
+                                  <Dropdown.Item
+                                    className="group data-selected:bg-muted/70 data-selected:text-foreground"
+                                    id={model.id}
+                                    onHoverStart={() => ensureEntryModels(model)}
+                                    textValue={model.name}
+                                  >
+                                    <span
+                                      aria-hidden="true"
+                                      className="h-5 w-0.5 shrink-0 rounded-full bg-transparent transition-colors group-data-selected:bg-accent"
+                                    />
                                     {model.chefSlug && <AIProviderLogo providerId={model.chefSlug} alt={model.chef} className="shrink-0" size={20} />}
                                     <Label className="min-w-0 flex-1 truncate text-left">{model.name}</Label>
                                     <Dropdown.SubmenuIndicator />
@@ -2684,12 +2630,13 @@ export default function AgentPage() {
                       ))}
                     </Dropdown.Menu>
                   </Dropdown.Popover>
-                </Dropdown>
+                  </Dropdown>
 
-                {/* 思考强度：六档离散滑杆，GPT-5.6 的 max 档在最右侧。 */}
-                {!selectedLocalAgentId && (
-                  <AgentReasoningEffortControl value={reasoningEffort} onChange={setReasoningEffort} />
-                )}
+                  {/* 思考强度：六档离散滑杆，GPT-5.6 的 max 档在最右侧。 */}
+                  {!selectedLocalAgentId && (
+                    <AgentReasoningEffortControl value={reasoningEffort} onChange={setReasoningEffort} />
+                  )}
+                </div>
                 <ButtonGroup size="sm">
                   <AgentPromptPrimaryAction busy={effectiveBusy} status={effectiveStatus} workspaceReferenceCount={workspaceFileReferences.length} />
                 </ButtonGroup>

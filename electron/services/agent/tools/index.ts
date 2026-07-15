@@ -13,6 +13,7 @@ import { searchMessages } from './searchMessages'
 import { semanticSearch } from './semanticSearch'
 import { getContext } from './getContext'
 import { getTimeline } from './getTimeline'
+import { transcribeVoiceMessage } from './transcribeVoiceMessage'
 import { chatStats } from './chatStats'
 import { listGroups } from './listGroups'
 import { groupMembers } from './groupMembers'
@@ -23,7 +24,6 @@ import { searchMoments, momentsStats } from './moments'
 import { createRemember, createRecall, createListMemories, createForget, createConsolidate } from './memory'
 import { createDelegateAnalysis } from './delegateAnalysis'
 import { buildMcpTools } from './mcpExternal'
-import { webSearch } from './webSearch'
 import { generateImage } from './generateImage'
 import { searchStickers, sendSticker } from './stickers'
 import { sendRandomImage } from './sendRandomImage'
@@ -43,6 +43,7 @@ export function buildBaseTools(_scope: AgentScope): ToolSet {
     semantic_search: semanticSearch,
     get_context: getContext,
     get_timeline: getTimeline,
+    transcribe_voice_message: transcribeVoiceMessage,
     chat_stats: chatStats,
     list_groups: listGroups,
     group_members: groupMembers,
@@ -66,6 +67,7 @@ export function buildSubAgentTools(_scope: AgentScope): ToolSet {
     semantic_search: semanticSearch,
     get_context: getContext,
     get_timeline: getTimeline,
+    transcribe_voice_message: transcribeVoiceMessage,
     chat_stats: chatStats,
     list_groups: listGroups,
     group_members: groupMembers,
@@ -105,7 +107,6 @@ export function buildChatTools(
   scope: AgentScope,
   providerConfig: AgentProviderConfig,
   mcpTools: AgentMcpToolDescriptor[] = [],
-  enableWebSearch = false,
   enableImageGen = false,
   options: BuildChatToolsOptions = {},
 ): ToolSet {
@@ -115,7 +116,6 @@ export function buildChatTools(
     search_similar_media: createSearchSimilarMedia(options.uploadedMediaContext),
     ...createAgentCapabilityTools(),
     ...buildMcpTools(mcpTools),
-    ...(enableWebSearch ? { web_search: webSearch } : {}),
     ...(enableImageGen ? { generate_image: generateImage } : {}),
     ...(options.allowWechatReplyMedia ? createWechatReplyMediaTools() : {}),
     export_chat: exportChat,
@@ -136,12 +136,10 @@ export function buildChatTools(
 
 export function buildCodeOnlyTools(
   codeWorkspace: CodeWorkspaceRef | null | undefined,
-  enableWebSearch = false,
   enableImageGen = false,
 ): ToolSet {
   return {
     ...createCodeWorkspaceTools(codeWorkspace),
-    ...(enableWebSearch ? { web_search: webSearch } : {}),
     ...(enableImageGen ? { generate_image: generateImage } : {}),
   }
 }
@@ -150,13 +148,12 @@ export function buildTools(
   scope: AgentScope,
   providerConfig: AgentProviderConfig,
   mcpTools: AgentMcpToolDescriptor[] = [],
-  enableWebSearch = false,
   enableImageGen = false,
   codeWorkspace?: CodeWorkspaceRef | null,
   options: BuildChatToolsOptions = {},
 ): ToolSet {
   return {
-    ...buildChatTools(scope, providerConfig, mcpTools, enableWebSearch, enableImageGen, options),
+    ...buildChatTools(scope, providerConfig, mcpTools, enableImageGen, options),
     ...createCodeWorkspaceTools(codeWorkspace),
   }
 }

@@ -387,13 +387,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     test: (cfg: unknown) => ipcRenderer.invoke('rerank:test', cfg) as Promise<{ success: boolean; error?: string }>,
   },
 
-  // 联网搜索（Tavily）—— AI Agent web_search 工具
-  webSearch: {
-    getConfig: () => ipcRenderer.invoke('webSearch:getConfig') as Promise<{ success: boolean; config?: unknown; error?: string }>,
-    setConfig: (patch: unknown) => ipcRenderer.invoke('webSearch:setConfig', patch) as Promise<{ success: boolean; config?: unknown; error?: string }>,
-    test: (cfg: unknown) => ipcRenderer.invoke('webSearch:test', cfg) as Promise<{ success: boolean; resultCount?: number; error?: string }>,
-  },
-
   // 文字转语音 —— 朗读 AI 回复/微信消息/角色语音回复
   tts: {
     getConfig: () => ipcRenderer.invoke('tts:getConfig') as Promise<{ success: boolean; config?: unknown; available?: boolean; error?: string }>,
@@ -848,8 +841,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getModelStatus: () => ipcRenderer.invoke('stt:getModelStatus'),
     downloadModel: () => ipcRenderer.invoke('stt:downloadModel'),
     cancelDownloadModel: () => ipcRenderer.invoke('stt:cancelDownloadModel'),
-    transcribe: (wavBase64: string, sessionId: string, createTime: number, force?: boolean) => ipcRenderer.invoke('stt:transcribe', wavBase64, sessionId, createTime, force),
-    transcribeFile: (filePath: string, sessionId: string, createTime: number, force?: boolean) => ipcRenderer.invoke('stt:transcribeFile', filePath, sessionId, createTime, force),
+    transcribe: (wavBase64: string, sessionId: string, createTime: number, force?: boolean, localId?: number) => ipcRenderer.invoke('stt:transcribe', wavBase64, sessionId, createTime, force, localId),
+    transcribeFile: (filePath: string, sessionId: string, createTime: number, force?: boolean, localId?: number) => ipcRenderer.invoke('stt:transcribeFile', filePath, sessionId, createTime, force, localId),
     testOnlineConfig: (overrides?: { provider?: 'openai-compatible' | 'aliyun-qwen-asr' | 'qianwen-cloud' | 'volcano-doubao' | 'custom'; apiKey?: string; baseURL?: string; model?: string; language?: string; timeoutMs?: number }) =>
       ipcRenderer.invoke('stt-online:test-config', overrides),
     onDownloadProgress: (callback: (progress: { modelName: string; downloadedBytes: number; totalBytes?: number; percent?: number }) => void) => {
@@ -860,8 +853,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.on('stt:partialResult', (_, text) => callback(text))
       return () => ipcRenderer.removeAllListeners('stt:partialResult')
     },
-    getCachedTranscript: (sessionId: string, createTime: number) => ipcRenderer.invoke('stt:getCachedTranscript', sessionId, createTime),
-    updateTranscript: (sessionId: string, createTime: number, transcript: string) => ipcRenderer.invoke('stt:updateTranscript', sessionId, createTime, transcript),
+    getCachedTranscript: (sessionId: string, createTime: number, localId?: number) => ipcRenderer.invoke('stt:getCachedTranscript', sessionId, createTime, localId),
+    updateTranscript: (sessionId: string, createTime: number, transcript: string, localId?: number) => ipcRenderer.invoke('stt:updateTranscript', sessionId, createTime, transcript, localId),
     clearModel: () => ipcRenderer.invoke('stt:clearModel')
   },
 
@@ -893,7 +886,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getProxyStatus: () => ipcRenderer.invoke('ai:getProxyStatus'),
     refreshProxy: () => ipcRenderer.invoke('ai:refreshProxy'),
     testProxy: (proxyUrl: string, testUrl?: string) => ipcRenderer.invoke('ai:testProxy', proxyUrl, testUrl),
-    testConnection: (provider: string, apiKey: string, baseURL?: string, protocol?: 'openai-responses' | 'openai-compatible' | 'anthropic' | 'google') => ipcRenderer.invoke('ai:testConnection', provider, apiKey, baseURL, protocol),
+    testConnection: (provider: string, apiKey: string, baseURL?: string, protocol?: 'openai-responses' | 'openai-compatible' | 'anthropic' | 'google', model?: string) => ipcRenderer.invoke('ai:testConnection', provider, apiKey, baseURL, protocol, model),
     listModels: (options: { provider: string; apiKey?: string; baseURL?: string; protocol?: 'openai-responses' | 'openai-compatible' | 'anthropic' | 'google' }) => ipcRenderer.invoke('ai:listModels', options),
     estimateCost: (messageCount: number, provider: string) => ipcRenderer.invoke('ai:estimateCost', messageCount, provider),
     readGuide: (guideName: string) => ipcRenderer.invoke('ai:readGuide', guideName)

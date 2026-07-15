@@ -69,10 +69,10 @@ class AIService {
     return (tokenCount / 1000) * provider.pricing.input
   }
 
-  async testConnection(providerName: string, apiKey: string, baseURL?: string, protocol?: AIProviderProtocol): Promise<{ success: boolean; error?: string; needsProxy?: boolean }> {
+  async testConnection(providerName: string, apiKey: string, baseURL?: string, protocol?: AIProviderProtocol, model?: string): Promise<{ success: boolean; error?: string; needsProxy?: boolean }> {
     try {
       const provider = this.getProvider(providerName, apiKey, baseURL, protocol)
-      return await provider.testConnection()
+      return await provider.testConnection(model)
     } catch (error) {
       return {
         success: false,

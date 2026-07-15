@@ -29,12 +29,6 @@ export interface RerankConfig {
   timeoutMs: number
 }
 
-export interface WebSearchConfig {
-  enabled: boolean
-  apiKey: string
-  maxResults: number
-}
-
 
 export type AgentConversationChangeType =
   | 'created'
@@ -1332,7 +1326,7 @@ export interface ElectronAPI {
       cancelled: boolean
       error?: string
     }>
-    transcribe: (wavBase64: string, sessionId: string, createTime: number, force?: boolean) => Promise<{
+    transcribe: (wavBase64: string, sessionId: string, createTime: number, force?: boolean, localId?: number) => Promise<{
       success: boolean
       transcript?: string
       cached?: boolean
@@ -1340,7 +1334,7 @@ export interface ElectronAPI {
       errorCode?: 'BAD_REQUEST' | 'STT_NOT_READY' | 'INTERNAL_ERROR'
       error?: string
     }>
-    transcribeFile: (filePath: string, sessionId: string, createTime: number, force?: boolean) => Promise<{
+    transcribeFile: (filePath: string, sessionId: string, createTime: number, force?: boolean, localId?: number) => Promise<{
       success: boolean
       transcript?: string
       cached?: boolean
@@ -1366,11 +1360,11 @@ export interface ElectronAPI {
       percent?: number
     }) => void) => () => void
     onPartialResult: (callback: (text: string) => void) => () => void
-    getCachedTranscript: (sessionId: string, createTime: number) => Promise<{
+    getCachedTranscript: (sessionId: string, createTime: number, localId?: number) => Promise<{
       success: boolean
       transcript?: string
     }>
-    updateTranscript: (sessionId: string, createTime: number, transcript: string) => Promise<{
+    updateTranscript: (sessionId: string, createTime: number, transcript: string, localId?: number) => Promise<{
       success: boolean
       error?: string
     }>
@@ -1562,11 +1556,6 @@ export interface ElectronAPI {
     setConfig: (patch: Partial<RerankConfig>) => Promise<{ success: boolean; config?: RerankConfig; error?: string }>
     test: (cfg: RerankConfig) => Promise<{ success: boolean; error?: string }>
   }
-  webSearch: {
-    getConfig: () => Promise<{ success: boolean; config?: WebSearchConfig; error?: string }>
-    setConfig: (patch: Partial<WebSearchConfig>) => Promise<{ success: boolean; config?: WebSearchConfig; error?: string }>
-    test: (cfg: WebSearchConfig) => Promise<{ success: boolean; resultCount?: number; error?: string }>
-  }
   tts: {
     getConfig: () => Promise<{ success: boolean; config?: TtsConfig; available?: boolean; error?: string }>
     setConfig: (patch: Partial<TtsConfig>) => Promise<{ success: boolean; config?: TtsConfig; error?: string }>
@@ -1601,7 +1590,7 @@ export interface ElectronAPI {
       message?: string
       error?: string
     }>
-    testConnection: (provider: string, apiKey: string, baseURL?: string, protocol?: 'openai-responses' | 'openai-compatible' | 'anthropic' | 'google') => Promise<{
+    testConnection: (provider: string, apiKey: string, baseURL?: string, protocol?: 'openai-responses' | 'openai-compatible' | 'anthropic' | 'google', model?: string) => Promise<{
       success: boolean
       error?: string
       needsProxy?: boolean

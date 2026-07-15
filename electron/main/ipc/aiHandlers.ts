@@ -182,13 +182,11 @@ async function buildDeepSeekHistoryTurnContext(opts: {
     prompts,
     memory,
     runtimeCache,
-    webSearch,
     imageGen,
   ] = await Promise.all([
     import('../../services/agent/prompts'),
     import('../../services/agent/tools/memory'),
     import('../../services/agent/runtimeCache'),
-    import('../../services/ai/webSearchService'),
     import('../../services/ai/imageGenService'),
   ])
   const promptParts = prompts.buildAgentPromptParts(opts.scope, opts.skills, {
@@ -208,7 +206,6 @@ async function buildDeepSeekHistoryTurnContext(opts: {
     promptParts.dynamicSystem,
     opts.planMode ? prompts.PLAN_MODE_PROMPT : '',
     opts.codeWorkspace ? prompts.CODE_WORKSPACE_PROMPT : '',
-    !toolsDisabled && webSearch.isWebSearchAvailable() ? prompts.WEB_SEARCH_PROMPT : '',
     !toolsDisabled && imageGen.isImageGenAvailable() ? prompts.IMAGE_GEN_PROMPT : '',
     memoryContext,
     promptParts.turnSystem,
@@ -1090,35 +1087,6 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
       return await testEmbeddingConfig(cfg)
     } catch (e) {
       return { success: false, error: formatIpcError(e, '嵌入模型测试失败') }
-    }
-  })
-
-  ipcMain.handle('webSearch:getConfig', async () => {
-    try {
-      const { getWebSearchConfig } = await import('../../services/ai/webSearchService')
-      return { success: true, config: getWebSearchConfig() }
-    } catch (e) {
-      return { success: false, error: e instanceof Error ? e.message : String(e) }
-    }
-  })
-
-  ipcMain.handle('webSearch:setConfig', async (_e, patch: Record<string, unknown>) => {
-    try {
-      const { saveWebSearchConfig } = await import('../../services/ai/webSearchService')
-      return { success: true, config: saveWebSearchConfig(patch as any) }
-    } catch (e) {
-      return { success: false, error: e instanceof Error ? e.message : String(e) }
-    }
-  })
-
-  ipcMain.handle('webSearch:test', async (_e, cfg: any) => {
-    try {
-      const { testWebSearchConfig } = await import('../../services/ai/webSearchService')
-      const { refreshResolvedProxyUrl } = await import('../../services/ai/proxyFetch')
-      await refreshResolvedProxyUrl() // 测试也走代理，保证"测试通过=实际可用"
-      return await testWebSearchConfig(cfg)
-    } catch (e) {
-      return { success: false, error: e instanceof Error ? e.message : String(e) }
     }
   })
 
@@ -2107,12 +2075,12 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
     }
   })
 
-  ipcMain.handle('ai:testConnection', async (_, provider: string, apiKey: string, baseURL?: string, protocol?: 'openai-responses' | 'openai-compatible' | 'anthropic' | 'google') => {
+  ipcMain.handle('ai:testConnection', async (_, provider: string, apiKey: string, baseURL?: string, protocol?: 'openai-responses' | 'openai-compatible' | 'anthropic' | 'google', model?: string) => {
     try {
       const { aiService } = await import('../../services/ai/aiService')
       const { refreshResolvedProxyUrl } = await import('../../services/ai/proxyFetch')
       await refreshResolvedProxyUrl() // 测试连接也走代理，保证"测试通过=实际可用"
-      return await aiService.testConnection(provider, apiKey, baseURL, protocol)
+      return await aiService.testConnection(provider, apiKey, baseURL, protocol, model)
     } catch (e) {
       return { success: false, error: String(e) }
     }
