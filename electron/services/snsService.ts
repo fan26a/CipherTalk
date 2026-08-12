@@ -1,6 +1,6 @@
 import { ConfigService } from './config'
 import { existsSync, mkdirSync, readdirSync, statSync } from 'fs'
-import { readFile, writeFile } from 'fs/promises'
+import { open, readFile, unlink, writeFile } from 'fs/promises'
 import { dirname, join } from 'path'
 import crypto from 'crypto'
 import zlib from 'zlib'
@@ -11,6 +11,11 @@ import { getDbStoragePath } from './dbStoragePaths'
 import { wcdbService } from './wcdbService'
 import { WasmService } from './wasmService'
 import { Isaac64 } from './isaac64'
+import {
+    downloadSnsVideoToFile,
+    isPlayableVideoBuffer,
+    SNS_VIDEO_DECRYPT_PREFIX_BYTES
+} from './snsVideoUtils'
 
 export interface SnsLivePhoto {
     url: string
@@ -123,8 +128,10 @@ const fixSnsUrl = (url: string, token?: string, isVideo: boolean = false) => {
     // 解码HTML实体
     let fixedUrl = url.replace(/&amp;/g, '&')
 
-    // HTTP → HTTPS
-    fixedUrl = fixedUrl.replace('http://', 'https://')
+    // 图片沿用 HTTPS；视频保留原始协议，部分微信视频 CDN 仅支持 HTTP。
+    if (!isVideo) {
+        fixedUrl = fixedUrl.replace(/^http:\/\//i, 'https://')
+    }
 
     // 图片：/150 → /0 获取原图（视频不需要）
     if (!isVideo) {
@@ -1544,11 +1551,26 @@ class SnsService {
         if (existsSync(cachePath)) {
             try {
                 if (isVideo) {
-                    return { success: true, cachePath, contentType: 'video/mp4' }
+                    const handle = await open(cachePath, 'r')
+                    try {
+                        const header = Buffer.alloc(12)
+                        const { bytesRead } = await handle.read(header, 0, header.length, 0)
+                        if (isPlayableVideoBuffer(header.subarray(0, bytesRead))) {
+                            return { success: true, cachePath, contentType: 'video/mp4' }
+                        }
+                    } finally {
+                        await handle.close()
+                    }
+
+                    // 旧实现会把解密失败或下载不完整的数据写成正式缓存。
+                    // 自动清理后重新下载，避免“重试”永久命中同一份坏文件。
+                    await unlink(cachePath).catch(() => { })
                 }
-                const data = await readFile(cachePath)
-                const contentType = detectImageMime(data)
-                return { success: true, data, contentType, cachePath }
+                if (existsSync(cachePath)) {
+                    const data = await readFile(cachePath)
+                    const contentType = detectImageMime(data)
+                    return { success: true, data, contentType, cachePath }
+                }
             } catch (e) {
                 console.warn(`[SnsService] 读取缓存失败: ${cachePath}`, e)
             }
@@ -1556,99 +1578,64 @@ class SnsService {
 
         // 视频：流式下载到临时文件
         if (isVideo) {
-            return new Promise(async (resolve) => {
-                const tmpPath = join(require('os').tmpdir(), `sns_video_${Date.now()}_${Math.random().toString(36).slice(2)}.enc`)
+            const tmpPath = join(require('os').tmpdir(), `sns_video_${Date.now()}_${Math.random().toString(36).slice(2)}.enc`)
 
-                try {
-                    const https = require('https')
-                    const urlObj = new URL(url)
-                    const fs = require('fs')
-                    const fileStream = fs.createWriteStream(tmpPath)
+            try {
+                const downloadResult = await downloadSnsVideoToFile(url, tmpPath)
+                if (!downloadResult.success) return downloadResult
 
-                    const options = {
-                        hostname: urlObj.hostname,
-                        path: urlObj.pathname + urlObj.search,
-                        method: 'GET',
-                        headers: {
-                            'User-Agent': 'MicroMessenger Client',
-                            'Accept': '*/*',
-                            'Connection': 'keep-alive'
-                        },
-                        rejectUnauthorized: false
+                const downloadedBuffer = await readFile(tmpPath)
+                if (downloadedBuffer.length === 0) {
+                    return { success: false, error: '视频下载结果为空' }
+                }
+
+                const originalIsPlayable = isPlayableVideoBuffer(downloadedBuffer)
+                let playableBuffer = originalIsPlayable ? downloadedBuffer : null
+
+                // 微信朋友圈视频只加密前 128KB。解密后必须验证文件头；如果 CDN
+                // 实际返回的是明文视频，则保留原始数据，避免错误 key 反而破坏明文。
+                const keyText = key === undefined || key === null ? '' : String(key).trim()
+                if (keyText.length > 0 && keyText !== '0') {
+                    const decryptedBuffer = Buffer.from(downloadedBuffer)
+                    const prefixLength = Math.min(SNS_VIDEO_DECRYPT_PREFIX_BYTES, decryptedBuffer.length)
+                    let keystream: Buffer
+
+                    try {
+                        const wasmService = WasmService.getInstance()
+                        keystream = await wasmService.getKeystream(keyText, prefixLength)
+                    } catch {
+                        // 打包漏带 wasm 或 wasm 初始化异常时，回退到纯 TS ISAAC64。
+                        const isaac = new Isaac64(keyText)
+                        keystream = isaac.generateKeystreamBE(prefixLength)
                     }
 
-                    const req = https.request(options, (res: any) => {
-                        if (res.statusCode !== 200 && res.statusCode !== 206) {
-                            fileStream.close()
-                            fs.unlink(tmpPath, () => { })
-                            resolve({ success: false, error: `HTTP ${res.statusCode}` })
-                            return
-                        }
+                    const decryptLength = Math.min(prefixLength, keystream.length)
+                    for (let i = 0; i < decryptLength; i++) {
+                        decryptedBuffer[i] ^= keystream[i]
+                    }
 
-                        res.pipe(fileStream)
-
-                        fileStream.on('finish', async () => {
-                            fileStream.close()
-
-                            try {
-                                const encryptedBuffer = await readFile(tmpPath)
-                                const raw = encryptedBuffer
-
-                                // 视频只解密前128KB
-                                const keyText = key === undefined || key === null ? '' : String(key).trim()
-                                if (keyText.length > 0 && keyText !== '0') {
-                                    try {
-                                        let keystream: Buffer
-
-                                        try {
-                                            const wasmService = WasmService.getInstance()
-                                            // 只需要前 128KB (131072 bytes) 用于解密头部
-                                            keystream = await wasmService.getKeystream(keyText, 131072)
-                                        } catch (wasmErr) {
-                                            // 打包漏带 wasm 或 wasm 初始化异常时，回退到纯 TS ISAAC64。
-                                            // generateKeystreamBE(len) 已等于 WASM getKeystream(len)，直接用，不 align 不 reverse。
-                                            const isaac = new Isaac64(keyText)
-                                            keystream = isaac.generateKeystreamBE(131072)
-                                        }
-
-                                        const decryptLen = Math.min(keystream.length, raw.length)
-
-                                        // XOR 解密
-                                        for (let i = 0; i < decryptLen; i++) {
-                                            raw[i] ^= keystream[i]
-                                        }
-
-                                        // 验证 MP4 签名 ('ftyp' at offset 4)
-                                        const ftyp = raw.subarray(4, 8).toString('ascii')
-                                        if (ftyp !== 'ftyp') {
-                                            // 签名验证失败，静默处理
-                                        }
-                                    } catch (err) {
-                                        console.error(`[SnsService] 视频解密出错: ${err}`)
-                                    }
-                                }
-
-                                await writeFile(cachePath, raw)
-                                try { await import('fs/promises').then(fs => fs.unlink(tmpPath)) } catch (e) { }
-
-                                resolve({ success: true, data: raw, contentType: 'video/mp4', cachePath })
-                            } catch (e: any) {
-                                console.error(`[SnsService] 视频处理失败:`, e)
-                                resolve({ success: false, error: e.message })
-                            }
-                        })
-                    })
-
-                    req.on('error', (e: any) => {
-                        fs.unlink(tmpPath, () => { })
-                        resolve({ success: false, error: e.message })
-                    })
-
-                    req.end()
-                } catch (e: any) {
-                    resolve({ success: false, error: e.message })
+                    if (isPlayableVideoBuffer(decryptedBuffer)) {
+                        playableBuffer = decryptedBuffer
+                    }
                 }
-            })
+
+                if (!playableBuffer) {
+                    return {
+                        success: false,
+                        error: keyText && keyText !== '0'
+                            ? '朋友圈视频解密失败：密钥无效或视频数据不完整'
+                            : '朋友圈视频缺少有效解密密钥'
+                    }
+                }
+
+                await writeFile(cachePath, playableBuffer)
+                return { success: true, data: playableBuffer, contentType: 'video/mp4', cachePath }
+            } catch (e: any) {
+                console.error('[SnsService] 视频处理失败:', e)
+                return { success: false, error: e?.message || String(e) }
+            } finally {
+                await unlink(tmpPath).catch(() => { })
+            }
         }
 
         // 图片：内存下载并解密
