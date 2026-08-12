@@ -20,6 +20,7 @@ export interface ExportOptions {
   exportAvatars: boolean
   exportImages: boolean
   exportVideos: boolean
+  exportFiles: boolean
   exportEmojis: boolean
   exportVoices: boolean
 }

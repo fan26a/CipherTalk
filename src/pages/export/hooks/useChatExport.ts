@@ -51,6 +51,7 @@ export function useChatExport(shared: ExportShared) {
     exportAvatars: true,
     exportImages: false,
     exportVideos: false,
+    exportFiles: false,
     exportEmojis: false,
     exportVoices: false
   })
@@ -142,6 +143,7 @@ export function useChatExport(shared: ExportShared) {
         exportAvatars: options.exportAvatars,
         exportImages: options.exportImages,
         exportVideos: options.exportVideos,
+        exportFiles: options.exportFiles,
         exportEmojis: options.exportEmojis,
         exportVoices: options.exportVoices
       }

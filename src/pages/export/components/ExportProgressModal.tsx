@@ -23,6 +23,7 @@ export default function ExportProgressModal({
     ? ([
         options.exportImages && '含图片',
         options.exportVideos && '含视频',
+        options.exportFiles && '含文件',
         options.exportEmojis && '含表情',
         options.exportVoices && '含语音',
         options.exportAvatars && '含头像'

@@ -12,7 +12,7 @@ import { dbAdapter } from './dbAdapter'
 import { wcdbService } from './wcdbService'
 import { findMessageDbPaths, findDbByName, getDbStoragePath } from './dbStoragePaths'
 import { snsService, isVideoUrl, type SnsPost, type SnsShareInfo } from './snsService'
-import { parseQuoteMessage } from './chat/contentParsers'
+import { parseFileInfo, parseQuoteMessage } from './chat/contentParsers'
 import { localPathFromFileUrl } from './fileUrlPath'
 
 // ChatLab 0.0.2 格式类型定义
@@ -125,11 +125,14 @@ export interface ExportOptions {
   exportAvatars?: boolean
   exportImages?: boolean
   exportVideos?: boolean
+  exportFiles?: boolean
   exportEmojis?: boolean
   exportVoices?: boolean
   mediaPathMap?: Map<number, string>
   // 语音独立映射表：同一秒可能存在多条语音，必须按 localId 索引
   voicePathMap?: Map<number, string>
+  // 文件独立映射表：按 localId 索引，避免同一秒内多条附件相互覆盖
+  filePathMap?: Map<number, string>
 }
 
 export interface ContactExportOptions {
@@ -503,7 +506,7 @@ class ExportService {
   /**
    * 解析消息内容为可读文本
    */
-  private parseMessageContent(content: string, localType: number, sessionId?: string, createTime?: number, mediaPathMap?: Map<number, string>, localId?: number, voicePathMap?: Map<number, string>): string | null {
+  private parseMessageContent(content: string, localType: number, sessionId?: string, createTime?: number, mediaPathMap?: Map<number, string>, localId?: number, voicePathMap?: Map<number, string>, filePathMap?: Map<number, string>): string | null {
     if (!content) return null
 
     // 检查 XML 中的 type 标签（支持大 localType 的情况）
@@ -511,6 +514,11 @@ class ExportService {
     const isAppMsgXml = /<appmsg[\s\S]*?>/i.test(content)
 
     if (xmlType && isAppMsgXml) {
+      const filePathKey = localId || createTime || 0
+      if (xmlType === '6' && filePathMap?.has(filePathKey)) {
+        const fileName = this.decodeHtmlEntities(this.extractXmlValue(content, 'title')) || '文件'
+        return `[文件] ${fileName} ${filePathMap.get(filePathKey)}`
+      }
       return this.parseType49(content)
     }
 
@@ -891,7 +899,7 @@ class ExportService {
       for (const msg of allMessages) {
         if ((++__msgTick & 0xff) === 0) await new Promise(resolve => setImmediate(resolve))
         const memberInfo = memberSet.get(msg.senderUsername) || { platformId: msg.senderUsername, accountName: msg.senderUsername }
-        let parsedContent = this.parseMessageContent(msg.content, msg.localType, sessionId, msg.createTime, options.mediaPathMap, msg.localId, options.voicePathMap)
+        let parsedContent = this.parseMessageContent(msg.content, msg.localType, sessionId, msg.createTime, options.mediaPathMap, msg.localId, options.voicePathMap, options.filePathMap)
 
         // 转账消息：追加 "谁转账给谁" 信息
         if (parsedContent && parsedContent.startsWith('[转账]') && msg.content) {
@@ -1568,7 +1576,7 @@ class ExportService {
               type: this.getMessageTypeName(localType, content),
               localType,
               chatLabType: this.convertMessageType(localType, content),
-              content: this.parseMessageContent(content, localType, sessionId, createTime, options.mediaPathMap, row.local_id || 0, options.voicePathMap),
+              content: this.parseMessageContent(content, localType, sessionId, createTime, options.mediaPathMap, row.local_id || 0, options.voicePathMap, options.filePathMap),
               rawContent: content, // 保留原始内容（用于转账描述解析）
               isSend: isSend ? 1 : 0,
               senderUsername: actualSender,
@@ -1774,7 +1782,7 @@ class ExportService {
         const time = new Date(msg.createTime * 1000)
 
         // 获取消息内容（使用统一的解析方法）
-        let messageContent = this.parseMessageContent(msg.content, msg.type, sessionId, msg.createTime, options.mediaPathMap, msg.localId, options.voicePathMap)
+        let messageContent = this.parseMessageContent(msg.content, msg.type, sessionId, msg.createTime, options.mediaPathMap, msg.localId, options.voicePathMap, options.filePathMap)
 
         // 转账消息：追加 "谁转账给谁" 信息
         if (messageContent && messageContent.startsWith('[转账]') && msg.content) {
@@ -1963,7 +1971,7 @@ class ExportService {
               chatRecordList = this.parseChatHistory(content)
             }
 
-            let parsedContent = this.parseMessageContent(content, localType, sessionId, createTime, options.mediaPathMap, row.local_id || 0, options.voicePathMap)
+            let parsedContent = this.parseMessageContent(content, localType, sessionId, createTime, options.mediaPathMap, row.local_id || 0, options.voicePathMap, options.filePathMap)
 
             // 转账消息：追加 "谁转账给谁" 信息
             if (parsedContent && parsedContent.startsWith('[转账]')) {
@@ -2175,7 +2183,7 @@ class ExportService {
             }
 
             // 解析消息内容
-            const parsedContent = this.parseMessageContent(content, localType, sessionId, createTime, options.mediaPathMap, row.local_id || 0, options.voicePathMap)
+            const parsedContent = this.parseMessageContent(content, localType, sessionId, createTime, options.mediaPathMap, row.local_id || 0, options.voicePathMap, options.filePathMap)
             const contentText = parsedContent !== null ? parsedContent : ''
 
             allMessages.push({
@@ -2411,7 +2419,7 @@ class ExportService {
         else if (options.format === 'sql') ext = '.sql'
 
         // 当导出媒体时，创建会话子文件夹，把文件和媒体都放进去
-        const hasMedia = options.exportImages || options.exportVideos || options.exportEmojis || options.exportVoices
+        const hasMedia = options.exportImages || options.exportVideos || options.exportFiles || options.exportEmojis || options.exportVoices
         const sessionOutputDir = hasMedia ? path.join(outputDir, safeName) : outputDir
         if (hasMedia && !fs.existsSync(sessionOutputDir)) {
           fs.mkdirSync(sessionOutputDir, { recursive: true })
@@ -2424,6 +2432,7 @@ class ExportService {
         // 先导出媒体文件，收集路径映射表
         let mediaPathMap: Map<number, string> | undefined
         let voicePathMap: Map<number, string> | undefined
+        let filePathMap: Map<number, string> | undefined
         const __tMedia = Date.now()
         if (hasMedia) {
           try {
@@ -2439,7 +2448,8 @@ class ExportService {
             })
             mediaPathMap = mediaResult.mediaPathMap
             voicePathMap = mediaResult.voicePathMap
-            for (const relativePath of new Set([...mediaPathMap.values(), ...voicePathMap.values()])) {
+            filePathMap = mediaResult.filePathMap
+            for (const relativePath of new Set([...mediaPathMap.values(), ...voicePathMap.values(), ...filePathMap.values()])) {
               outputPathSet.add(path.join(sessionOutputDir, relativePath))
             }
           } catch (e) {
@@ -2448,8 +2458,8 @@ class ExportService {
         }
 
         // 将媒体路径映射表附加到 options 上
-        const exportOpts = (mediaPathMap || voicePathMap)
-          ? { ...options, ...(mediaPathMap ? { mediaPathMap } : {}), ...(voicePathMap ? { voicePathMap } : {}) }
+        const exportOpts = (mediaPathMap || voicePathMap || filePathMap)
+          ? { ...options, ...(mediaPathMap ? { mediaPathMap } : {}), ...(voicePathMap ? { voicePathMap } : {}), ...(filePathMap ? { filePathMap } : {}) }
           : options
 
         if (hasMedia) {
@@ -2753,18 +2763,20 @@ class ExportService {
     outputDir: string,
     options: ExportOptions,
     onProgress?: (fraction: number, detail: string) => void
-  ): Promise<{ mediaPathMap: Map<number, string>; voicePathMap: Map<number, string> }> {
+  ): Promise<{ mediaPathMap: Map<number, string>; voicePathMap: Map<number, string>; filePathMap: Map<number, string> }> {
     // mediaPathMap：图片/视频/表情用 createTime → 相对路径
     // voicePathMap：语音用 localId → 相对路径（避免同时间戳冲突）
     const mediaPathMap = new Map<number, string>()
     const voicePathMap = new Map<number, string>()
+    const filePathMap = new Map<number, string>()
 
     const dbTablePairs = await this.findSessionTables(sessionId)
-    if (dbTablePairs.length === 0) return { mediaPathMap, voicePathMap }
+    if (dbTablePairs.length === 0) return { mediaPathMap, voicePathMap, filePathMap }
 
     // 创建媒体输出目录（直接在会话文件夹下创建子目录）
     const imageOutDir = options.exportImages ? path.join(outputDir, 'images') : ''
     const videoOutDir = options.exportVideos ? path.join(outputDir, 'videos') : ''
+    const fileOutDir = options.exportFiles ? path.join(outputDir, 'files') : ''
     const emojiOutDir = options.exportEmojis ? path.join(outputDir, 'emojis') : ''
 
     if (options.exportImages && !fs.existsSync(imageOutDir)) {
@@ -2773,22 +2785,27 @@ class ExportService {
     if (options.exportVideos && !fs.existsSync(videoOutDir)) {
       fs.mkdirSync(videoOutDir, { recursive: true })
     }
+    if (options.exportFiles && !fs.existsSync(fileOutDir)) {
+      fs.mkdirSync(fileOutDir, { recursive: true })
+    }
     if (options.exportEmojis && !fs.existsSync(emojiOutDir)) {
       fs.mkdirSync(emojiOutDir, { recursive: true })
     }
 
     let imageCount = 0
     let videoCount = 0
+    let fileCount = 0
     let emojiCount = 0
     // 表情按 cacheKey 去重下载（缓存 Promise，失败也记住）：
     // 输出文件名带 createTime，同一表情发 N 次 destPath 全 miss，
     // 死链 CDN 每次要等 15s×2 超时，不去重会把整场导出拖死
     const emojiFetchCache = new Map<string, Promise<string | null>>()
 
-    // 是否需要处理图片/视频/表情
-    const needMedia = options.exportImages || options.exportVideos || options.exportEmojis
+    // 是否需要处理图片/视频/文件/表情
+    const needMedia = options.exportImages || options.exportVideos || options.exportFiles || options.exportEmojis
+    const accountDir = this.dbDir ? path.dirname(this.dbDir) : ''
 
-    // 进度分母：图片/视频/表情按扫描到的消息行推进；启用语音时给语音留后 15% 区间
+    // 进度分母：图片/视频/文件/表情按扫描到的消息行推进；启用语音时给语音留后 15% 区间
     expStep('统计消息总数')
     const __tCount = Date.now()
     const totalMsgs = await this.countMessages(dbTablePairs, options.dateRange)
@@ -2798,10 +2815,10 @@ class ExportService {
     const reportMedia = (extra: number) => {
       if (!totalMsgs) return
       const frac = Math.min(1, (mediaScanned + extra) / totalMsgs) * mediaWeight
-      onProgress?.(frac, `导出媒体 图片${imageCount} · 视频${videoCount} · 表情${emojiCount}`)
+      onProgress?.(frac, `导出媒体 图片${imageCount} · 视频${videoCount} · 文件${fileCount} · 表情${emojiCount}`)
     }
 
-    // 图片/视频/表情循环（语音在后面独立处理）
+    // 图片/视频/文件/表情循环（语音在后面独立处理）
     if (needMedia) {
       onProgress?.(0, '正在导出媒体...')
       // 流式分批读取媒体消息行：每批 2000 行、批内 MEDIA_CONCURRENCY 路并发，
@@ -2918,6 +2935,49 @@ class ExportService {
               }
             }
 
+            // 导出文件附件（appmsg type=6）
+            if (options.exportFiles && accountDir && this.extractXmlValue(content, 'type') === '6') {
+              try {
+                const fileInfo = parseFileInfo(content)
+                const decodedFileName = this.decodeHtmlEntities(fileInfo.fileName || '')
+                const sourceFileName = path.basename(decodedFileName.replace(/\\/g, '/'))
+                if (sourceFileName) {
+                  const d = new Date(createTime * 1000)
+                  const monthFolder = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+                  const compactMonthFolder = monthFolder.replace('-', '')
+                  const sourceCandidates = [
+                    path.join(accountDir, 'msg', 'file', monthFolder, sourceFileName),
+                    path.join(accountDir, 'FileStorage', 'File', monthFolder, sourceFileName),
+                    path.join(accountDir, 'msg', 'file', compactMonthFolder, sourceFileName),
+                    path.join(accountDir, 'FileStorage', 'File', compactMonthFolder, sourceFileName)
+                  ]
+                  const sourcePath = sourceCandidates.find(candidate => {
+                    try { return fs.statSync(candidate).isFile() } catch { return false }
+                  })
+
+                  if (sourcePath) {
+                    const safeFileName = sourceFileName
+                      .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
+                      .replace(/\.+$/, '')
+                      .trim() || `file_${row.local_id || createTime}`
+                    const prefix = row.local_id > 0 ? `${createTime}_${row.local_id}_` : `${createTime}_`
+                    const exportedFileName = `${prefix}${safeFileName}`
+                    const df = this.dateFolder(createTime)
+                    const dayDir = path.join(fileOutDir, df)
+                    if (!fs.existsSync(dayDir)) fs.mkdirSync(dayDir, { recursive: true })
+                    const destPath = path.join(dayDir, exportedFileName)
+                    if (!fs.existsSync(destPath)) {
+                      fs.copyFileSync(sourcePath, destPath)
+                      fileCount++
+                    }
+                    filePathMap.set(row.local_id || createTime, `files/${df}/${exportedFileName}`)
+                  }
+                }
+              } catch {
+                // 跳过未下载或无法访问的单个文件附件
+              }
+            }
+
             // 导出表情包
             if (options.exportEmojis && localType === 47) {
               try {
@@ -3002,7 +3062,7 @@ class ExportService {
           ))
           reportMedia(pageRows.length)
           mediaScanned += pageRows.length
-          expLog(`媒体扫描 ${mediaScanned}/${totalMsgs} · 图${imageCount} 视${videoCount} 表${emojiCount} · 本页 ${pageRows.length} 行耗时 ${((Date.now() - __tPage) / 1000).toFixed(1)}s`)
+          expLog(`媒体扫描 ${mediaScanned}/${totalMsgs} · 图${imageCount} 视${videoCount} 文${fileCount} 表${emojiCount} · 本页 ${pageRows.length} 行耗时 ${((Date.now() - __tPage) / 1000).toFixed(1)}s`)
           expStep('读取媒体消息(下一页)')
           __tPage = Date.now()
       }
@@ -3269,12 +3329,13 @@ class ExportService {
     const parts: string[] = []
     if (imageCount > 0) parts.push(`${imageCount} 张图片`)
     if (videoCount > 0) parts.push(`${videoCount} 个视频`)
+    if (fileCount > 0) parts.push(`${fileCount} 个文件`)
     if (emojiCount > 0) parts.push(`${emojiCount} 个表情`)
     if (voiceCount > 0) parts.push(`${voiceCount} 条语音`)
     const summary = parts.length > 0 ? `媒体导出完成: ${parts.join(', ')}` : '无媒体文件'
     onProgress?.(1, summary)
     console.log(`[Export] ${sessionId} ${summary}`)
-    return { mediaPathMap, voicePathMap }
+    return { mediaPathMap, voicePathMap, filePathMap }
   }
 
   private dateFolder(ts: number): string {
@@ -3809,4 +3870,3 @@ class ExportService {
 }
 
 export const exportService = new ExportService()
-
