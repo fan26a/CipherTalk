@@ -678,6 +678,15 @@ export interface PluginInfo {
   error?: string
 }
 
+export interface ChatLabSyncLogEntry {
+  runId: string
+  sessionId: string
+  sessionName: string
+  at: number
+  level: 'info' | 'warn' | 'error'
+  message: string
+}
+
 export interface ElectronAPI {
   window: {
     minimize: () => void
@@ -741,6 +750,12 @@ export interface ElectronAPI {
     getTldCache: () => Promise<{ tlds: string[]; updatedAt: number } | null>
     setTldCache: (tlds: string[]) => Promise<void>
     onChanged: (callback: (payload: { key: string; value: unknown }) => void) => () => void
+  }
+  chatLabSync: {
+    test: () => Promise<{ ok: boolean; error?: string; info?: { name?: string; version?: string; sessionCount?: number } }>
+    syncNow: () => Promise<Array<{ sessionId: string; sessionName: string; ok: boolean; written: number; duplicate: number; error?: string }>>
+    getRecentLogs: () => Promise<ChatLabSyncLogEntry[]>
+    onLog: (callback: (entry: ChatLabSyncLogEntry) => void) => () => void
   }
   plugin: {
     list: () => Promise<{ plugins: PluginInfo[]; devModeEnabled: boolean }>
@@ -1134,8 +1149,9 @@ export interface ElectronAPI {
     decryptImage: (inputPath: string, outputPath: string, xorKey: number, aesKey?: string) => Promise<{ success: boolean; error?: string }>
   }
   image: {
-    decrypt: (payload: { sessionId?: string; imageMd5?: string; imageDatName?: string; createTime?: number; force?: boolean; quick?: boolean }) => Promise<{ success: boolean; localPath?: string; error?: string }>
-    resolveCache: (payload: { sessionId?: string; imageMd5?: string; imageDatName?: string; createTime?: number }) => Promise<{ success: boolean; localPath?: string; hasUpdate?: boolean; error?: string }>
+    decrypt: (payload: { sessionId?: string; imageMd5?: string; imageDatName?: string; createTime?: number; force?: boolean; quick?: boolean }) => Promise<{ success: boolean; localPath?: string; isThumb?: boolean; liveVideoPath?: string; error?: string }>
+    resolveCache: (payload: { sessionId?: string; imageMd5?: string; imageDatName?: string; createTime?: number }) => Promise<{ success: boolean; localPath?: string; isThumb?: boolean; hasUpdate?: boolean; liveVideoPath?: string; error?: string }>
+    inspectQualities: (payloads: Array<{ key: string; sessionId?: string; imageMd5?: string; imageDatName?: string; createTime?: number }>) => Promise<{ success: boolean; items: Array<{ key: string; quality: 'thumbnail' | 'large' | 'unknown' }> }>
     prewarm: (payloads: Array<{ sessionId?: string; imageMd5?: string; imageDatName?: string; createTime?: number }>) => Promise<{ success: boolean; requested: number; enqueued: number; cacheHits: number; decrypted: number; failed: number; skipped: number; error?: string }>
     batchDecrypt: (payloads: Array<{ sessionId?: string; imageMd5?: string; imageDatName?: string; createTime?: number }>) => Promise<{ success: boolean; requested: number; current: number; total: number; successCount: number; failCount: number; cacheHits: number; decrypted: number; skipped: number; error?: string }>
     onBatchDecryptProgress: (callback: (data: { current: number; total: number; successCount: number; failCount: number; cacheHits: number; decrypted: number; skipped: number }) => void) => () => void
@@ -1256,12 +1272,39 @@ export interface ElectronAPI {
     }>
     getAllImageMessages: (sessionId: string) => Promise<{
       success: boolean;
-      images?: { imageMd5?: string; imageDatName?: string; createTime?: number }[];
+      images?: {
+        localId: number;
+        serverId: number;
+        createTime: number;
+        sortSeq: number;
+        imageMd5?: string;
+        imageDatName?: string;
+      }[];
+      error?: string
+    }>
+    getAllMediaMessages: (sessionId: string) => Promise<{
+      success: boolean
+      media?: Array<{
+        mediaType: 'image' | 'video'
+        localId: number
+        serverId: number
+        createTime: number
+        sortSeq: number
+        isSend: number | null
+        senderUsername: string | null
+        imageMd5?: string
+        imageDatName?: string
+        rawContent?: string
+        videoMd5?: string
+        videoDuration?: number
+      }>
       error?: string
     }>
     getImageData: (sessionId: string, msgId: string, createTime?: number) => Promise<{
       success: boolean
       data?: string
+      isThumb?: boolean
+      liveVideoPath?: string
       error?: string
     }>
     getContact: (username: string) => Promise<Contact | null>

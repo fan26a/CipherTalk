@@ -9,6 +9,7 @@ import { registerAppUpdateHandlers } from './appUpdateHandlers'
 import { registerAuthHandlers } from './authHandlers'
 import { registerCacheHandlers } from './cacheHandlers'
 import { registerChatHandlers } from './chatHandlers'
+import { registerChatLabSyncHandlers } from './chatLabSyncHandlers'
 import { registerCodexSubscriptionHandlers } from './codexSubscriptionHandlers'
 import { registerConfigHandlers } from './configHandlers'
 import { registerDataManagementHandlers } from './dataManagementHandlers'
@@ -50,6 +51,7 @@ export function registerModularIpcHandlers(ctx: MainProcessContext): void {
   registerDataManagementHandlers(ctx)
   registerMediaHandlers(ctx)
   registerChatHandlers(ctx)
+  registerChatLabSyncHandlers(ctx)
   registerCodexSubscriptionHandlers(ctx)
   registerRelayOneHandlers(ctx)
   registerSnsHandlers(ctx)

@@ -56,6 +56,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }
   },
 
+  // ChatLab 定时同步
+  chatLabSync: {
+    test: () => ipcRenderer.invoke('chatlab-sync:test'),
+    syncNow: () => ipcRenderer.invoke('chatlab-sync:syncNow'),
+    getRecentLogs: () => ipcRenderer.invoke('chatlab-sync:getRecentLogs'),
+    onLog: (callback: (entry: any) => void) => {
+      const listener = (_: any, entry: any) => callback(entry)
+      ipcRenderer.on('chatlab-sync:log', listener)
+      return () => { ipcRenderer.removeListener('chatlab-sync:log', listener) }
+    }
+  },
+
   // 插件系统（见 PLUGIN_SYSTEM_PLAN.md）
   plugin: {
     list: () => ipcRenderer.invoke('plugin:list') as Promise<{ plugins: any[]; devModeEnabled: boolean }>,
@@ -760,6 +772,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('image:decrypt', payload),
     resolveCache: (payload: { sessionId?: string; imageMd5?: string; imageDatName?: string; createTime?: number }) =>
       ipcRenderer.invoke('image:resolveCache', payload),
+    inspectQualities: (payloads: Array<{ key: string; sessionId?: string; imageMd5?: string; imageDatName?: string; createTime?: number }>) =>
+      ipcRenderer.invoke('image:inspectQualities', payloads),
     prewarm: (payloads: Array<{ sessionId?: string; imageMd5?: string; imageDatName?: string; createTime?: number }>) =>
       ipcRenderer.invoke('image:prewarm', payloads),
     batchDecrypt: (payloads: Array<{ sessionId?: string; imageMd5?: string; imageDatName?: string; createTime?: number }>) =>
@@ -836,6 +850,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('chat:getAllVoiceMessages', sessionId),
     getAllImageMessages: (sessionId: string) =>
       ipcRenderer.invoke('chat:getAllImageMessages', sessionId),
+    getAllMediaMessages: (sessionId: string) =>
+      ipcRenderer.invoke('chat:getAllMediaMessages', sessionId),
     getImageData: (sessionId: string, msgId: string, createTime?: number) =>
       ipcRenderer.invoke('chat:getImageData', sessionId, msgId, createTime),
     getContact: (username: string) => ipcRenderer.invoke('chat:getContact', username),

@@ -70,6 +70,26 @@ export interface Message {
   transferReceiverUsername?: string // 转账收款方 wxid
 }
 
+/** 图片消息的轻量索引，供图库和批量解密使用。 */
+export interface ImageMessageRef {
+  localId: number
+  serverId: number
+  createTime: number
+  sortSeq: number
+  imageMd5?: string
+  imageDatName?: string
+}
+
+/** 图片/视频消息的轻量索引，供会话媒体图库使用。 */
+export interface MediaMessageRef extends ImageMessageRef {
+  mediaType: 'image' | 'video'
+  isSend: number | null
+  senderUsername: string | null
+  rawContent?: string
+  videoMd5?: string
+  videoDuration?: number
+}
+
 export interface ChatLabSourceMessage {
   localId: number
   serverId: number

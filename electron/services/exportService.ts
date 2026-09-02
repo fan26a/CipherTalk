@@ -1087,6 +1087,207 @@ class ExportService {
   }
 
   /**
+   * 构建 ChatLab 格式的会话数据（不落盘），供「定时同步到 ChatLab」直接复用。
+   *
+   * 与 exportSessionToChatLab 共享同一套读取/解码/类型映射逻辑，但不导出头像、不处理
+   * 媒体文件落盘，也不写文件——返回内存对象，由调用方决定如何推送。
+   * dateRange 用于增量：传 { start, end } 只读该时间窗口内的消息；不传则全量。
+   * options.transcribeVoices 为 true 时，对无转写缓存的语音消息自动转写（结果落缓存，
+   * content 携带转写文本）；options.maxTranscribe 限制单次最多转写条数，避免首次全量时
+   * 海量历史语音一次性转写耗时过长。
+   */
+  async buildChatLabPayload(
+    sessionId: string,
+    dateRange?: { start: number; end: number } | null,
+    options?: { transcribeVoices?: boolean; maxTranscribe?: number }
+  ): Promise<{ success: boolean; error?: string; payload?: ChatLabExport; transcribedCount?: number }> {
+    try {
+      if (!this.dbDir) {
+        const connectResult = await this.connect()
+        if (!connectResult.success) return connectResult
+      }
+
+      const myWxid = this.configService.get('myWxid') || ''
+      const cleanedMyWxid = this.cleanAccountDirName(myWxid)
+      const isGroup = sessionId.includes('@chatroom')
+
+      const sessionInfo = await this.getContactInfo(sessionId)
+
+      const dbTablePairs = await this.findSessionTables(sessionId)
+      if (dbTablePairs.length === 0) {
+        return { success: false, error: '未找到该会话的消息' }
+      }
+
+      const allMessages: any[] = []
+      const memberSet = new Map<string, ChatLabMember>()
+      const groupNicknameCache = new Map<string, string>()
+
+      for await (const rows of this.readMessagesFast(dbTablePairs, dateRange)) {
+        for (const row of rows) {
+          const createTime = row.create_time || 0
+
+          if (dateRange) {
+            if (createTime < dateRange.start || createTime > dateRange.end) continue
+          }
+
+          const content = row.content || ''
+          const localType = row.localType || 1
+          const senderUsername = row.sender_username || ''
+
+          const isSend = row.is_send === 1 || senderUsername === cleanedMyWxid
+
+          let actualSender: string
+          if (localType === 10000 || localType === 266287972401) {
+            const revokeInfo = this.extractRevokerInfo(content)
+            if (revokeInfo.isRevoke) {
+              if (revokeInfo.isSelfRevoke) {
+                actualSender = cleanedMyWxid
+              } else if (revokeInfo.revokerWxid) {
+                actualSender = revokeInfo.revokerWxid
+              } else {
+                actualSender = sessionId
+              }
+            } else {
+              actualSender = sessionId
+            }
+          } else {
+            actualSender = isSend ? cleanedMyWxid : senderUsername
+          }
+
+          const platformMessageId = row.server_id ? String(row.server_id) : (row.local_id ? String(row.local_id) : undefined)
+
+          let replyToMessageId: string | undefined
+          if (localType === 49 && content.includes('<type>57</type>')) {
+            const svridMatch = /<svrid>(\d+)<\/svrid>/i.exec(content)
+            if (svridMatch) replyToMessageId = svridMatch[1]
+          }
+
+          let groupNickname: string | undefined
+          if (isGroup && actualSender) {
+            if (groupNicknameCache.has(actualSender)) {
+              groupNickname = groupNicknameCache.get(actualSender)
+            } else {
+              const nicknameFromContent = this.extractGroupNickname(content, actualSender)
+              if (nicknameFromContent) {
+                groupNickname = nicknameFromContent
+                groupNicknameCache.set(actualSender, nicknameFromContent)
+              }
+            }
+          }
+
+          allMessages.push({
+            createTime,
+            localId: row.local_id,
+            localType,
+            content,
+            senderUsername: actualSender,
+            isSend,
+            platformMessageId,
+            replyToMessageId,
+            groupNickname
+          })
+
+          if (actualSender && !memberSet.has(actualSender)) {
+            const memberInfo = await this.getContactInfo(actualSender)
+            memberSet.set(actualSender, {
+              platformId: actualSender,
+              accountName: memberInfo.displayName,
+              ...(groupNickname && { groupNickname }),
+              ...(memberInfo.avatarUrl && { avatar: memberInfo.avatarUrl })
+            })
+          } else if (actualSender && groupNickname && !memberSet.get(actualSender)?.groupNickname) {
+            const existing = memberSet.get(actualSender)!
+            memberSet.set(actualSender, { ...existing, groupNickname })
+          }
+        }
+      }
+
+      if (allMessages.length === 0) {
+        return { success: false, error: '没有消息可同步' }
+      }
+
+      allMessages.sort((a, b) => a.createTime - b.createTime)
+
+      const chatLabMessages: ChatLabMessage[] = []
+      let __msgTick = 0
+      const maxTranscribe = options?.maxTranscribe ?? 30
+      let transcribeCount = 0
+      for (const msg of allMessages) {
+        if ((++__msgTick & 0xff) === 0) await new Promise(resolve => setImmediate(resolve))
+
+        // 语音自动转写：无缓存时主动转写并落缓存，使 content 携带转写文本。
+        // chatService / sttRuntimeService 动态 import，避免 exportUtilityProcess 加载本模块时
+        // 连带加载主进程专属依赖。
+        if (options?.transcribeVoices && msg.localType === 34 && transcribeCount < maxTranscribe) {
+          if (!voiceTranscribeService.hasCachedTranscript(sessionId, msg.createTime, msg.localId)) {
+            transcribeCount++
+            try {
+              const [{ chatService }, { sttRuntimeService }] = await Promise.all([
+                import('./chatService'),
+                import('./sttRuntimeService')
+              ])
+              const voice = await chatService.getVoiceData(sessionId, String(msg.localId), msg.createTime)
+              if (voice.success && voice.data) {
+                await sttRuntimeService.transcribeWavBuffer(Buffer.from(voice.data, 'base64'), {
+                  cache: { sessionId, createTime: msg.createTime, localId: msg.localId }
+                })
+              }
+            } catch (e) {
+              console.warn('ExportService: 语音自动转写失败:', e)
+            }
+          }
+        }
+
+        const memberInfo = memberSet.get(msg.senderUsername) || { platformId: msg.senderUsername, accountName: msg.senderUsername }
+        const parsedContent = this.parseMessageContent(msg.content, msg.localType, sessionId, msg.createTime, undefined, msg.localId)
+
+        const message: ChatLabMessage = {
+          sender: msg.senderUsername,
+          accountName: memberInfo.accountName,
+          timestamp: msg.createTime,
+          type: this.convertMessageType(msg.localType, msg.content),
+          content: parsedContent
+        }
+
+        if (msg.groupNickname) message.groupNickname = msg.groupNickname
+        if (msg.platformMessageId) message.platformMessageId = msg.platformMessageId
+        if (msg.replyToMessageId) message.replyToMessageId = msg.replyToMessageId
+
+        chatLabMessages.push(message)
+      }
+
+      const meta: ChatLabMeta = {
+        name: sessionInfo.displayName,
+        platform: 'wechat',
+        type: isGroup ? 'group' : 'private',
+        ownerId: cleanedMyWxid
+      }
+      if (isGroup) {
+        meta.groupId = sessionId
+        if (sessionInfo.avatarUrl) {
+          meta.groupAvatar = sessionInfo.avatarUrl
+        }
+      }
+
+      const payload: ChatLabExport = {
+        chatlab: {
+          version: '0.0.2',
+          exportedAt: Math.floor(Date.now() / 1000),
+          generator: 'CipherTalk'
+        },
+        meta,
+        members: Array.from(memberSet.values()),
+        messages: chatLabMessages
+      }
+
+      return { success: true, payload, transcribedCount: transcribeCount }
+    } catch (e) {
+      console.error('ExportService: 构建 ChatLab payload 失败:', e)
+      return { success: false, error: String(e) }
+    }
+  }
+
+  /**
    * 从消息内容中提取群昵称
    */
   private extractGroupNickname(content: string, senderUsername: string): string | undefined {

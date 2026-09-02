@@ -16,6 +16,19 @@ function getAppAsarPath() {
 
 const appAsarPath = getAppAsarPath();
 
+// dist-electron/mcp.js and selected runtime packages are unpacked for Electron,
+// while pure-JS transitive dependencies remain in app.asar. Node normally starts
+// resolution from app.asar.unpacked and cannot cross that boundary, so expose the
+// packaged node_modules directory as a trusted fallback for every unpacked module.
+const appNodeModulesPath = path.join(appAsarPath, "node_modules");
+const existingNodePathEntries = String(process.env.NODE_PATH || "")
+  .split(path.delimiter)
+  .filter(Boolean);
+process.env.NODE_PATH = [appNodeModulesPath, ...existingNodePathEntries]
+  .filter((entry, index, entries) => entries.indexOf(entry) === index)
+  .join(path.delimiter);
+Module._initPaths();
+
 function getUserDataPath() {
   if (process.platform === "darwin") {
     return path.join(os.homedir(), "Library", "Application Support", "ciphertalk");

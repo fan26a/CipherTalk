@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>会话日记</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="page-shell">
+      <header class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">DAILY CONVERSATION JOURNAL</p>
+          <h1>会话日记</h1>
+          <p>从文字与语音里，整理出值得留下的片段。</p>
+        </div>
+        <div class="hero-actions">
+          <button id="open-settings" class="ct-btn" type="button">日记设置</button>
+          <button id="open-regenerate" class="ct-btn ct-btn-primary" type="button" disabled>重新生成</button>
+        </div>
+      </header>
+
+      <div class="list-heading">
+        <div>
+          <h2 class="ct-title">我的日记</h2>
+          <p id="diary-count" class="ct-hint">正在读取日记…</p>
+        </div>
+        <span class="privacy-pill">内容仅在本机处理</span>
+      </div>
+
+      <section class="ct-card generation-panel">
+        <div class="generation-copy">
+          <h2 class="ct-title">生成日记</h2>
+          <p class="ct-hint">选择日期范围，范围内每天生成一篇日记；同一天重新生成会覆盖旧日记。</p>
+        </div>
+        <div class="generation-controls">
+          <div class="home-date-field">
+            <label for="start-date">开始日期</label>
+            <input id="start-date" class="ct-input" type="date" />
+          </div>
+          <span class="range-separator" aria-hidden="true">至</span>
+          <div class="home-date-field">
+            <label for="end-date">结束日期</label>
+            <input id="end-date" class="ct-input" type="date" />
+          </div>
+          <button id="generate" class="ct-btn ct-btn-primary generate-button" type="button">
+            <span id="generate-spinner" class="ct-spinner button-spinner" hidden></span>
+            <span id="generate-label">生成日记</span>
+          </button>
+        </div>
+        <div id="progress-panel" class="progress-panel generation-progress" hidden>
+          <div class="progress-copy">
+            <strong id="progress-title">正在准备</strong>
+            <span id="progress-detail" class="ct-hint"></span>
+          </div>
+          <progress id="progress" class="ct-progress" value="0" max="100"></progress>
+        </div>
+      </section>
+
+      <div id="global-error" class="error-panel" role="alert" hidden></div>
+
+      <section id="loading-state" class="diary-grid" aria-label="正在加载">
+        <div class="ct-skeleton diary-skeleton"></div>
+        <div class="ct-skeleton diary-skeleton"></div>
+        <div class="ct-skeleton diary-skeleton"></div>
+      </section>
+
+      <section id="diary-grid" class="diary-grid" aria-label="日记列表" hidden></section>
+
+      <section id="empty-state" class="ct-card empty-state" hidden>
+        <span class="empty-mark" aria-hidden="true">✦</span>
+        <h2>还没有日记</h2>
+        <p>选择一个会话和时间范围，让 AI 帮你整理第一篇。</p>
+        <button id="empty-create" class="ct-btn ct-btn-primary" type="button">生成第一篇日记</button>
+      </section>
+    </main>
+
+    <dialog id="settings-dialog" class="ct-dialog settings-dialog">
+      <div class="dialog-header">
+        <div>
+          <p id="settings-eyebrow" class="eyebrow">DIARY SETTINGS</p>
+          <h2 id="settings-title" class="ct-dialog-title">日记设置</h2>
+          <p id="settings-description" class="ct-hint">设置日记使用的会话与 AI 写作提示词。</p>
+        </div>
+        <button id="close-settings" class="icon-button" type="button" aria-label="关闭">×</button>
+      </div>
+
+      <div class="dialog-body">
+        <div class="field">
+          <div class="label-row">
+            <label class="ct-label" for="session-search">会话</label>
+            <button id="refresh-sessions" class="text-button" type="button">刷新</button>
+          </div>
+          <div id="session-combobox" class="session-combobox">
+            <input
+              id="session-search"
+              class="ct-input session-search"
+              type="text"
+              role="combobox"
+              aria-autocomplete="list"
+              aria-expanded="false"
+              aria-controls="session-options"
+              autocomplete="off"
+              placeholder="搜索会话名称或账号"
+            />
+            <span class="search-icon" aria-hidden="true">⌕</span>
+            <div id="session-options" class="session-options ct-scroll" role="listbox" hidden></div>
+          </div>
+          <p id="session-status" class="ct-hint field-hint">正在读取会话…</p>
+        </div>
+
+        <div class="field prompt-field">
+          <div class="label-row">
+            <label class="ct-label" for="prompt">AI 提示词</label>
+            <span id="prompt-count" class="ct-hint">0 / 6000</span>
+          </div>
+          <textarea
+            id="prompt"
+            class="ct-textarea prompt-input"
+            maxlength="6000"
+            placeholder="告诉 AI 日记的口吻、重点和格式"
+          ></textarea>
+          <p class="ct-hint field-hint">会话和提示词保存在插件的本地私有存储中。</p>
+        </div>
+
+        <div class="field backup-field">
+          <div class="label-row">
+            <span class="ct-label">备份与恢复</span>
+            <span class="ct-hint">JSON</span>
+          </div>
+          <div class="backup-actions">
+            <button id="export-backup" class="ct-btn" type="button">导出全部日记</button>
+            <button id="import-backup" class="ct-btn ct-btn-ghost" type="button">导入备份</button>
+            <input
+              id="import-file"
+              type="file"
+              accept=".json,application/json"
+              aria-label="选择日记备份文件"
+              hidden
+            />
+          </div>
+          <p id="backup-status" class="ct-hint field-hint">
+            备份包含日记正文、会话标识和生成提示词；导入时同一天的日记会在确认后被覆盖。
+          </p>
+        </div>
+
+        <div id="settings-error" class="error-panel" role="alert" hidden></div>
+      </div>
+
+      <div class="ct-dialog-actions dialog-actions">
+        <button id="cancel-settings" class="ct-btn ct-btn-ghost" type="button">取消</button>
+        <button id="save-settings" class="ct-btn ct-btn-primary" type="button">保存设置</button>
+      </div>
+    </dialog>
+
+    <dialog id="reader-dialog" class="ct-dialog reader-dialog">
+      <div class="dialog-header reader-header">
+        <div>
+          <p id="reader-meta" class="eyebrow"></p>
+          <h2 id="reader-title" class="ct-dialog-title">日记</h2>
+        </div>
+        <button id="close-reader" class="icon-button" type="button" aria-label="关闭">×</button>
+      </div>
+      <div class="reader-summary">
+        <span id="reader-session" class="ct-chip"></span>
+        <span id="reader-stats" class="ct-chip ct-chip-accent"></span>
+      </div>
+      <div class="reader-scroll ct-scroll">
+        <pre id="reader-content" class="diary-content"></pre>
+        <div id="reader-warnings" class="warning-box" hidden></div>
+      </div>
+      <div class="ct-dialog-actions reader-actions">
+        <button id="delete-entry" class="ct-btn ct-btn-danger" type="button">删除日记</button>
+        <button id="regenerate-entry" class="ct-btn ct-btn-primary" type="button">重新生成</button>
+      </div>
+    </dialog>
+
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

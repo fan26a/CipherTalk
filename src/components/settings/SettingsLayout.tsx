@@ -25,9 +25,10 @@ const DataManagementTab = lazy(() => import('./tabs/DataManagementTab'))
 const DatabaseTab = lazy(() => import('./tabs/DatabaseTab'))
 const SttTab = lazy(() => import('./tabs/SttTab'))
 const MemoryTab = lazy(() => import('./tabs/MemoryTab'))
+const ChatLabSyncTab = lazy(() => import('./tabs/ChatLabSyncTab'))
 const PluginsTab = lazy(() => import('./tabs/PluginsTab'))
 
-type SettingsTab = 'appearance' | 'database' | 'stt' | 'ai' | 'memory' | 'data' | 'plugins' | 'security' | 'activation' | 'about'
+type SettingsTab = 'appearance' | 'database' | 'stt' | 'ai' | 'memory' | 'data' | 'chatlab' | 'plugins' | 'security' | 'activation' | 'about'
 
 const tabs: { id: SettingsTab; label: string; icon: React.ElementType }[] = [
   { id: 'appearance', label: '外观', icon: Palette },
@@ -37,6 +38,7 @@ const tabs: { id: SettingsTab; label: string; icon: React.ElementType }[] = [
   { id: 'ai', label: 'AI 接入', icon: Sparkles },
   { id: 'memory', label: '记忆', icon: Bulb },
   { id: 'data', label: '数据管理', icon: HardDrive },
+  { id: 'chatlab', label: 'ChatLab 同步', icon: ArrowsRotateLeft },
   { id: 'plugins', label: '插件', icon: PlugConnection },
   // { id: 'activation', label: '激活', icon: Shield },
   { id: 'about', label: '关于', icon: CircleInfo }
@@ -1389,6 +1391,11 @@ function SettingsLayout() {
               reloadConfig={loadConfig}
               onClearCurrentAccountConfig={handleClearCurrentAccountConfig}
             />
+          </Suspense>
+        )}
+        {activeTab === 'chatlab' && (
+          <Suspense fallback={<SettingsTabSkeleton />}>
+            <ChatLabSyncTab showMessage={showMessage} />
           </Suspense>
         )}
         {activeTab === 'plugins' && (

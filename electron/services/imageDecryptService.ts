@@ -72,6 +72,9 @@ type ImageLookupPayload = {
   quick?: boolean
 }
 
+type ImageQuality = 'thumbnail' | 'large' | 'unknown'
+type ImageQualityLookupPayload = ImageLookupPayload & { key: string }
+
 type ImagePrewarmResult = {
   success: boolean
   requested: number
@@ -111,7 +114,6 @@ export class ImageDecryptService {
   private cacheIndexing: Promise<void> | null = null
   private updateFlags = new Map<string, boolean>()
   private notFoundCache = new Set<string>()  // 失败缓存，避免重复查询
-  private hdNotFoundCache = new Set<string>()  // 高清图失败缓存
   private nativeLogged = false
   private datPathIndex = new Map<string, string>()
   // wxgf/HEVC→JPG 转码结果按内容哈希缓存（同一张贴纸会在很多条消息里重复出现，
@@ -156,7 +158,7 @@ export class ImageDecryptService {
         }
         const liveVideoPath = isThumb ? undefined : this.checkLiveVideoCache(cached)
         this.emitCacheResolved(payload, key, localPath)
-        return { success: true, localPath, hasUpdate, liveVideoPath }
+        return { success: true, localPath, isThumb, hasUpdate, liveVideoPath }
       }
       if (cached && !this.validateCachedImageFile(cached)) {
         this.resolvedCache.delete(key)
@@ -178,7 +180,7 @@ export class ImageDecryptService {
         }
         const liveVideoPath = isThumb ? undefined : this.checkLiveVideoCache(existing)
         this.emitCacheResolved(payload, key, localPath)
-        return { success: true, localPath, hasUpdate, liveVideoPath }
+        return { success: true, localPath, isThumb, hasUpdate, liveVideoPath }
       }
     }
 
@@ -196,7 +198,7 @@ export class ImageDecryptService {
       }
       const liveVideoPath = isThumb ? undefined : this.checkLiveVideoCache(existing)
       this.emitCacheResolved(payload, key, localPath)
-      return { success: true, localPath, hasUpdate, liveVideoPath }
+      return { success: true, localPath, isThumb, hasUpdate, liveVideoPath }
     }
 
     // 3. 后台启动完整索引（不阻塞当前请求）
@@ -221,9 +223,6 @@ export class ImageDecryptService {
 
     // 即使 force=true，也先检查是否有高清图缓存
     if (payload.force) {
-      if (this.hdNotFoundCache.has(lookupCacheKey)) {
-        return { success: false, error: '未找到高清图，请在微信中点开该图片查看后重试' }
-      }
       // 快速查找高清图缓存
       const hdCached = this.findCachedOutputFast(cacheKey, payload.sessionId, true, payload.createTime) ||
         this.findCachedOutput(cacheKey, payload.sessionId, true)
@@ -256,6 +255,61 @@ export class ImageDecryptService {
       return await task
     } finally {
       this.pending.delete(cacheKey)
+    }
+  }
+
+  /**
+   * 仅识别图片当前可用的是缩略图还是大图，不触发解密。
+   * 图库用它建立质量筛选索引；无法从缓存或源 dat 路径判断时返回 unknown。
+   */
+  async inspectImageQualities(
+    payloads: ImageQualityLookupPayload[]
+  ): Promise<{ success: boolean; items: Array<{ key: string; quality: ImageQuality }> }> {
+    const queue = Array.isArray(payloads) ? payloads.slice(0, 200) : []
+    const items = new Array<{ key: string; quality: ImageQuality }>(queue.length)
+    let cursor = 0
+
+    const inspectNext = async () => {
+      while (cursor < queue.length) {
+        const index = cursor++
+        const payload = queue[index]
+        items[index] = {
+          key: payload.key,
+          quality: await this.inspectImageQuality(payload)
+        }
+      }
+    }
+
+    await Promise.all(Array.from({ length: Math.min(4, queue.length) }, inspectNext))
+    return { success: true, items }
+  }
+
+  private async inspectImageQuality(payload: ImageLookupPayload): Promise<ImageQuality> {
+    try {
+      const cached = await this.resolveCachedImage(payload)
+      if (cached.success && cached.localPath) {
+        const isThumb = cached.isThumb ?? this.isThumbnailPath(cached.localPath)
+        return isThumb ? 'thumbnail' : 'large'
+      }
+
+      const wxid = this.configService.get('myWxid')
+      const dbPath = this.configService.get('dbPath')
+      if (!wxid || !dbPath) return 'unknown'
+      const accountDir = this.resolveAccountDir(dbPath, wxid)
+      if (!accountDir) return 'unknown'
+
+      const datPath = await this.resolveDatPath(
+        accountDir,
+        payload.imageMd5,
+        payload.imageDatName,
+        payload.sessionId,
+        payload.createTime,
+        { allowThumbnail: true, skipSearchFallback: false }
+      )
+      if (!datPath) return 'unknown'
+      return this.isThumbnailPath(datPath) ? 'thumbnail' : 'large'
+    } catch {
+      return 'unknown'
     }
   }
 
@@ -508,7 +562,6 @@ export class ImageDecryptService {
 
       // 如果要求高清图但没找到，直接返回提示
       if (!datPath && payload.force) {
-        this.hdNotFoundCache.add(lookupCacheKey)
         console.warn(`[ImageDecrypt] 未找到高清图: ${payload.imageDatName || payload.imageMd5}`)
         this.logDecryptTiming({
           cacheKey,

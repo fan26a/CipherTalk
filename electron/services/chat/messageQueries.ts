@@ -23,7 +23,7 @@ import {
   parseVideoMd5,
   parseVoiceDuration,
 } from './contentParsers'
-import type { Message, ChatLabSourceMessage, ChatRecordItem } from './types'
+import type { Message, ChatLabSourceMessage, ChatRecordItem, ImageMessageRef, MediaMessageRef } from './types'
 import type { ChatServiceState } from './state'
 
 function hasUsableSortSeqCursor(cursorSortSeq: number): boolean {
@@ -1168,14 +1168,14 @@ export async function getAllVoiceMessages(state: ChatServiceState,
  */
 export async function getAllImageMessages(state: ChatServiceState, 
   sessionId: string
-): Promise<{ success: boolean; images?: { imageMd5?: string; imageDatName?: string; createTime?: number }[]; error?: string }> {
+): Promise<{ success: boolean; images?: ImageMessageRef[]; error?: string }> {
   try {
     const dbTablePairs = await findSessionTables(state, sessionId)
     if (dbTablePairs.length === 0) {
       return { success: false, error: '未找到该会话的消息表' }
     }
 
-    const images: { imageMd5?: string; imageDatName?: string; createTime?: number }[] = []
+    const images: ImageMessageRef[] = []
 
     for (const { tableName, dbPath } of dbTablePairs) {
       try {
@@ -1198,7 +1198,10 @@ export async function getAllImageMessages(state: ChatServiceState,
         const selectCandidates = [
           'message_content',
           'compress_content',
+          'local_id',
+          'server_id',
           'create_time',
+          'sort_seq',
           'imageMd5',
           'image_md5',
           'md5',
@@ -1282,11 +1285,15 @@ export async function getAllImageMessages(state: ChatServiceState,
             'path',
             'filePath'
           ])) || parseImageDatNameFromRow(row)
-          if (imageMd5 || datName) {
+          const localId = Number(getRowField(row, ['local_id', 'localId', 'LocalId'])) || 0
+          if (imageMd5 || datName || localId > 0) {
             images.push({
+              localId,
+              serverId: Number(getRowField(row, ['server_id', 'serverId', 'ServerId'])) || 0,
               imageMd5,
               imageDatName: datName,
-              createTime: Number(getRowField(row, ['create_time', 'createTime', 'CreateTime'])) || undefined
+              createTime: Number(getRowField(row, ['create_time', 'createTime', 'CreateTime'])) || 0,
+              sortSeq: Number(getRowField(row, ['sort_seq', 'sortSeq', 'SortSeq'])) || 0
             })
           }
         }
@@ -1295,10 +1302,14 @@ export async function getAllImageMessages(state: ChatServiceState,
       }
     }
 
-    // 去重
+    // 跨分库可能查到同一条消息：按消息身份去重，不能按图片 MD5 去重，
+    // 否则同一张图片在不同日期重复发送时，图库会漏掉后续消息。
+    images.sort((a, b) =>
+      b.createTime - a.createTime || b.sortSeq - a.sortSeq || b.localId - a.localId
+    )
     const seen = new Set<string>()
     const unique = images.filter(img => {
-      const key = img.imageMd5 || img.imageDatName || ''
+      const key = `${img.serverId}-${img.localId}-${img.createTime}-${img.sortSeq}-${img.imageMd5 || img.imageDatName || ''}`
       if (!key || seen.has(key)) return false
       seen.add(key)
       return true
@@ -1309,6 +1320,125 @@ export async function getAllImageMessages(state: ChatServiceState,
   } catch (e) {
     console.error('[ChatService] 获取所有图片消息失败:', e)
     return { success: false, error: String(e) }
+  }
+}
+
+/**
+ * 获取会话的所有图片和视频消息（用于媒体图库）。
+ * 与普通消息查询使用同样的 Name2Id 关联，以便准确返回发送者和 isSend。
+ */
+export async function getAllMediaMessages(
+  state: ChatServiceState,
+  sessionId: string
+): Promise<{ success: boolean; media?: MediaMessageRef[]; error?: string }> {
+  try {
+    const myWxid = state.configService.get('myWxid')
+    const cleanedMyWxid = myWxid ? cleanAccountDirName(myWxid) : ''
+    const dbTablePairs = await findSessionTables(state, sessionId)
+    if (dbTablePairs.length === 0) {
+      return { success: false, error: '未找到该会话的消息表' }
+    }
+
+    const media: MediaMessageRef[] = []
+
+    for (const { tableName, dbPath } of dbTablePairs) {
+      try {
+        const columns = await dbAdapter.all<any>('message', dbPath, `PRAGMA table_info('${tableName}')`)
+        const columnNames = columns.map((column: any) => String(column.name).toLowerCase())
+        const hasLocalTypeColumn = columnNames.includes('local_type')
+        const hasTypeColumn = columnNames.includes('type')
+        if (!hasLocalTypeColumn && !hasTypeColumn) continue
+
+        const typeCondition = hasLocalTypeColumn && hasTypeColumn
+          ? '(m.local_type IN (3, 43) OR m.type IN (3, 43))'
+          : hasLocalTypeColumn
+            ? 'm.local_type IN (3, 43)'
+            : 'm.type IN (3, 43)'
+        const orderColumns = [
+          columnNames.includes('sort_seq') ? 'm.sort_seq DESC' : null,
+          columnNames.includes('create_time') ? 'm.create_time DESC' : null,
+          columnNames.includes('local_id') ? 'm.local_id DESC' : null,
+        ].filter((value): value is string => Boolean(value))
+        const orderBy = orderColumns.length > 0 ? ` ORDER BY ${orderColumns.join(', ')}` : ''
+        const hasName2IdTable = await checkTableExists(state, dbPath, 'Name2Id')
+        const myRowId = await resolveMyRowId(state, dbPath, myWxid, cleanedMyWxid, hasName2IdTable)
+
+        let rows: any[]
+        if (hasName2IdTable && myRowId !== null) {
+          rows = await dbAdapter.all<any>(
+            'message',
+            dbPath,
+            `SELECT m.*,
+                    CASE WHEN m.real_sender_id = ? THEN 1 ELSE 0 END AS computed_is_send,
+                    n.user_name AS sender_username
+             FROM ${tableName} m
+             LEFT JOIN Name2Id n ON m.real_sender_id = n.rowid
+             WHERE ${typeCondition}${orderBy}`,
+            [myRowId]
+          )
+        } else if (hasName2IdTable) {
+          rows = await dbAdapter.all<any>(
+            'message',
+            dbPath,
+            `SELECT m.*, n.user_name AS sender_username
+             FROM ${tableName} m
+             LEFT JOIN Name2Id n ON m.real_sender_id = n.rowid
+             WHERE ${typeCondition}${orderBy}`
+          )
+        } else {
+          rows = await dbAdapter.all<any>(
+            'message',
+            dbPath,
+            `SELECT m.* FROM ${tableName} m WHERE ${typeCondition}${orderBy}`
+          )
+        }
+
+        for (const row of rows) {
+          const message = rowToMessage(state, row)
+          if ((message.localType !== 3 && message.localType !== 43) || !isMessageVisibleForSession(sessionId, message)) {
+            continue
+          }
+
+          const mediaType = message.localType === 43 ? 'video' : 'image'
+          if (mediaType === 'image' && !message.imageMd5 && !message.imageDatName && message.localId <= 0) {
+            continue
+          }
+          media.push({
+            mediaType,
+            localId: message.localId,
+            serverId: message.serverId,
+            createTime: message.createTime,
+            sortSeq: message.sortSeq,
+            isSend: message.isSend,
+            senderUsername: message.senderUsername,
+            imageMd5: message.imageMd5,
+            imageDatName: message.imageDatName,
+            rawContent: mediaType === 'video' ? message.rawContent : undefined,
+            videoMd5: message.videoMd5,
+            videoDuration: message.videoDuration,
+          })
+        }
+      } catch (error) {
+        console.error(`[ChatService] 查询媒体消息失败 (${dbPath}):`, error)
+      }
+    }
+
+    media.sort((a, b) =>
+      b.createTime - a.createTime || b.sortSeq - a.sortSeq || b.localId - a.localId
+    )
+    const seen = new Set<string>()
+    const unique = media.filter((item) => {
+      const key = `${item.mediaType}-${item.serverId}-${item.localId}-${item.createTime}-${item.sortSeq}`
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+
+    console.log(`[ChatService] 共找到 ${unique.length} 条图片/视频消息（去重后）`)
+    return { success: true, media: unique }
+  } catch (error) {
+    console.error('[ChatService] 获取所有媒体消息失败:', error)
+    return { success: false, error: String(error) }
   }
 }
 

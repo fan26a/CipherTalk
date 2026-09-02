@@ -16,7 +16,10 @@ export type ContextMenuState = {
 }
 
 export type BatchImageMessage = {
+  localId?: number
+  serverId?: number
   imageMd5?: string
   imageDatName?: string
   createTime?: number
+  sortSeq?: number
 }

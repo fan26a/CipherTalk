@@ -10,6 +10,8 @@ import type {
   ChatLabSourceMessage,
   ChatRecordItem,
   Contact,
+  ImageMessageRef,
+  MediaMessageRef,
 } from './chat/types'
 import {
   getContacts,
@@ -48,6 +50,7 @@ import {
   getMessagesForChatLab,
   getAllVoiceMessages,
   getAllImageMessages,
+  getAllMediaMessages,
   getMessagesByDate,
   getDatesWithMessages,
 } from './chat/messageQueries'
@@ -59,6 +62,8 @@ export type {
   ChatLabSourceMessage,
   ChatRecordItem,
   Contact,
+  ImageMessageRef,
+  MediaMessageRef,
 }
 
 class ChatService extends EventEmitter {
@@ -443,8 +448,15 @@ class ChatService extends EventEmitter {
    */
   async getAllImageMessages(
     sessionId: string
-  ): Promise<{ success: boolean; images?: { imageMd5?: string; imageDatName?: string; createTime?: number }[]; error?: string }> {
+  ): Promise<{ success: boolean; images?: ImageMessageRef[]; error?: string }> {
     return getAllImageMessages(this.state, sessionId)
+  }
+
+  /** 获取会话的所有图片和视频（用于媒体图库）。 */
+  async getAllMediaMessages(
+    sessionId: string
+  ): Promise<{ success: boolean; media?: MediaMessageRef[]; error?: string }> {
+    return getAllMediaMessages(this.state, sessionId)
   }
 
   /**
@@ -610,7 +622,7 @@ class ChatService extends EventEmitter {
    * 获取图片数据（base64）。
    * 与 WeFlow 一致，作为聊天页图片渲染的 localId 兜底通道。
    */
-  async getImageData(sessionId: string, msgId: string, createTime?: number): Promise<{ success: boolean; data?: string; liveVideoPath?: string; error?: string }> {
+  async getImageData(sessionId: string, msgId: string, createTime?: number): Promise<{ success: boolean; data?: string; isThumb?: boolean; liveVideoPath?: string; error?: string }> {
     return getImageData(this.state, sessionId, msgId, createTime)
   }
 

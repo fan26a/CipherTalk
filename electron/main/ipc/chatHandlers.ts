@@ -202,6 +202,10 @@ export function registerChatHandlers(ctx: MainProcessContext): void {
     return chatService.getAllImageMessages(sessionId)
   })
 
+  ipcMain.handle('chat:getAllMediaMessages', async (_, sessionId: string) => {
+    return chatService.getAllMediaMessages(sessionId)
+  })
+
   ipcMain.handle('chat:getImageData', async (_, sessionId: string, msgId: string, createTime?: number) => {
     return chatService.getImageData(sessionId, msgId, createTime)
   })

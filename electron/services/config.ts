@@ -324,6 +324,19 @@ interface ConfigSchema {
       model?: string
     }>
   }
+  // ChatLab 定时同步：把指定私聊/群聊会话增量同步到本机 ChatLab API
+  chatLabToken: string
+  chatLabBaseUrl: string
+  chatLabSyncJobs: Array<{
+    sessionId: string
+    sessionName: string
+    enabled: boolean
+    intervalMinutes: number
+    dailyTime?: string
+    lastSyncedAt?: number
+    lastMessageId?: string
+    lastRunAt?: number
+  }>
 }
 
 const defaults: ConfigSchema = {
@@ -521,7 +534,15 @@ const defaults: ConfigSchema = {
   remoteSignalingUrl: '',
   remotePairingId: '',
   remoteDevices: [],
-  remotePairingPasswordHash: ''
+  remoteApnsKeyP8: '',
+  remoteApnsKeyId: '',
+  remoteApnsTeamId: '',
+  remoteBarkUrl: '',
+  remoteBarkKey: '',
+  remotePairingPasswordHash: '',
+  chatLabToken: '',
+  chatLabBaseUrl: 'http://127.0.0.1:3110',
+  chatLabSyncJobs: []
 }
 
 export class ConfigService {

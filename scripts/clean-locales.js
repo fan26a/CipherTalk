@@ -198,6 +198,42 @@ function verifyFfmpegStaticPacked(context) {
     );
 }
 
+// CipherTalk MCP 的入口和 @modelcontextprotocol/sdk 都位于 app.asar.unpacked。
+// SDK 会在启动阶段加载 zod-to-json-schema；如果该同级依赖仍留在 app.asar，
+// 外部 MCP 客户端会在 initialize 前直接遇到 MODULE_NOT_FOUND。
+function verifyMcpRuntimePacked(context) {
+    const productName = context.packager?.appInfo?.productFilename || 'CipherTalk';
+    const resourceRoots = uniqueExistingDirs([
+        path.join(context.appOutDir, 'resources'),
+        path.join(context.appOutDir, 'Contents', 'Resources'),
+        path.join(context.appOutDir, `${productName}.app`, 'Contents', 'Resources')
+    ]);
+    const requiredPaths = [
+        path.join('dist-electron', 'mcp.js'),
+        path.join('node_modules', '@modelcontextprotocol', 'sdk', 'package.json'),
+        path.join('node_modules', 'zod', 'package.json'),
+        path.join('node_modules', 'zod-to-json-schema', 'package.json')
+    ];
+
+    for (const resourceRoot of resourceRoots) {
+        const unpackedRoot = path.join(resourceRoot, 'app.asar.unpacked');
+        const missingPaths = requiredPaths.filter((relativePath) => {
+            const packedPath = path.join(unpackedRoot, relativePath);
+            return !fs.existsSync(packedPath) || fs.statSync(packedPath).size === 0;
+        });
+
+        if (missingPaths.length === 0) {
+            console.log(`[afterPack] CipherTalk MCP 运行时依赖已打包: ${unpackedRoot}`);
+            return;
+        }
+    }
+
+    throw new Error(
+        `[afterPack] CipherTalk MCP 运行时依赖未完整打进 app.asar.unpacked：${requiredPaths.join(', ')}。` +
+        `请检查 build.files / asarUnpack，尤其是 @modelcontextprotocol/sdk 的同级依赖 zod-to-json-schema。`
+    );
+}
+
 // ChatGPT 订阅 Provider 由密语直接发起 OAuth/Responses 请求，不需要 Codex CLI 运行时。
 function verifyCodexRuntimeAbsent(context) {
     const stack = [context.appOutDir];
@@ -285,6 +321,8 @@ exports.default = async function (context) {
     verifySharpVipsPacked(context);
 
     verifyFfmpegStaticPacked(context);
+
+    verifyMcpRuntimePacked(context);
 
     verifyCodexRuntimeAbsent(context);
 

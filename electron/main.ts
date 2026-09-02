@@ -23,6 +23,7 @@ import {
   checkAndConnectOnStartup,
   checkForUpdatesOnStartup,
   startBackgroundSync,
+  startChatLabSyncService,
   startLocalIntegrationServices,
   startNightlyMemoryConsolidation,
   stopLocalIntegrationServices,
@@ -357,6 +358,9 @@ if (gotSingleInstanceLock) {
 
     // 独立夜间记忆整理：无对话也会在应用运行时按小时检查一次。
     startNightlyMemoryConsolidation(ctx)
+
+    // ChatLab 定时同步：按配置把指定会话增量同步到本机 ChatLab API。
+    startChatLabSyncService(ctx)
 
     app.on('activate', () => {
       const mainWindow = ctx.getMainWindow()

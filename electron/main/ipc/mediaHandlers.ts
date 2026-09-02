@@ -156,6 +156,10 @@ export function registerMediaHandlers(ctx: MainProcessContext): void {
     return result
   })
 
+  ipcMain.handle('image:inspectQualities', async (_, payloads: Array<{ key: string; sessionId?: string; imageMd5?: string; imageDatName?: string; createTime?: number }>) => {
+    return imageDecryptService.inspectImageQualities(payloads)
+  })
+
   ipcMain.handle('image:prewarm', async (_, payloads: Array<{ sessionId?: string; imageMd5?: string; imageDatName?: string; createTime?: number }>) => {
     return imageDecryptService.prewarmImages(payloads, { limit: 40, concurrency: 2 })
   })

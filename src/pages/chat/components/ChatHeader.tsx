@@ -2,6 +2,7 @@ import { Aperture, ArrowDownToLine, ArrowsRotateLeft, Bell, BellSlash, Bulb, Cir
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { AlertDialog, Button, Drawer, Dropdown, Label, Switch, Tooltip } from '@heroui/react'
 import { CloneSelfModal } from './CloneSelfModal'
+import { ChatImageGalleryModal } from './ChatImageGalleryModal'
 import { DateJumpPicker } from './DateJumpPicker'
 import type { ChatSession } from '../../../types/models'
 import type { EmbeddingBuildProgress, EmbeddingBuildTarget, EmbeddingVectorStoreInfo } from '../../../types/electron'
@@ -152,6 +153,7 @@ export function ChatHeader({
   const [contactNickName, setContactNickName] = useState('')
   const [sessionDetail, setSessionDetail] = useState<SessionDetail | null>(null)
   const [sessionDetailLoading, setSessionDetailLoading] = useState(false)
+  const [imageGalleryOpen, setImageGalleryOpen] = useState(false)
   const headerRef = useRef<HTMLDivElement>(null)
   const [detailDrawerHost, setDetailDrawerHost] = useState<HTMLElement | null>(null)
 
@@ -803,6 +805,22 @@ export function ChatHeader({
           </Tooltip>
         )}
 
+        <Tooltip delay={0}>
+          <Tooltip.Trigger>
+            <Button
+              isIconOnly
+              size="sm"
+              variant="ghost"
+              aria-label="查看聊天图片和视频"
+              isDisabled={!currentSessionId}
+              onPress={() => setImageGalleryOpen(true)}
+            >
+              <Picture width={18} height={18} />
+            </Button>
+          </Tooltip.Trigger>
+          <Tooltip.Content placement="bottom">查看聊天媒体</Tooltip.Content>
+        </Tooltip>
+
         <DateJumpPicker
           sessionId={currentSessionId}
           value={selectedDate}
@@ -885,6 +903,12 @@ export function ChatHeader({
       </div>
 
       {detailDrawerHost ? detailDrawer : null}
+
+      <ChatImageGalleryModal
+        isOpen={imageGalleryOpen}
+        session={currentSession}
+        onOpenChange={setImageGalleryOpen}
+      />
 
       {isPrivateSession && (
         <CloneSelfModal

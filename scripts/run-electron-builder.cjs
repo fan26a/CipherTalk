@@ -41,6 +41,18 @@ const result = spawnSync(
   }
 )
 
+if (result.error) {
+  console.error(`electron-builder 启动失败: ${result.error.message}`)
+  process.exit(1)
+}
+
+// 必须先传递本次 builder 的真实结果。仅检查产物会让上一次遗留的 DMG/EXE
+// 掩盖当前打包失败，导致 build:mac 看似成功却仍是旧包。
+if (result.status !== 0) {
+  console.error(`electron-builder 打包失败（退出码 ${result.status ?? '未知'}）`)
+  process.exit(typeof result.status === 'number' && result.status > 0 ? result.status : 1)
+}
+
 // 构建阶段只要求安装包产物存在，自动更新元数据交给后续发布阶段校验。
 const artifactNames = target === 'mac'
   ? [`release/CipherTalk-${pkg.version}-Setup.dmg`]

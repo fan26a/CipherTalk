@@ -3,6 +3,7 @@ import { ConfigService } from '../services/config'
 import { appUpdateService } from '../services/appUpdateService'
 import { chatService } from '../services/chatService'
 import { nightlyMemoryService } from '../services/memory/nightlyMemoryService'
+import { chatLabSyncService } from '../services/chatLabSyncService'
 import { getMcpProxyConfig } from '../services/mcp/runtime'
 import { mcpProxyService } from '../services/mcp/proxyService'
 import { remoteGatewayService } from '../services/remote/gateway'
@@ -323,6 +324,7 @@ export async function startLocalIntegrationServices(ctx: MainProcessContext): Pr
 
 export function stopLocalIntegrationServices(): void {
   nightlyMemoryService.stop()
+  chatLabSyncService.stop()
   closeBridgeWindow()
   remoteGatewayService.stop().catch((e) => {
     console.error('[RemoteGateway] 停止失败:', e)
@@ -337,4 +339,8 @@ export function stopLocalIntegrationServices(): void {
 
 export function startNightlyMemoryConsolidation(ctx: MainProcessContext): void {
   nightlyMemoryService.init(ctx)
+}
+
+export function startChatLabSyncService(ctx: MainProcessContext): void {
+  chatLabSyncService.init(ctx)
 }

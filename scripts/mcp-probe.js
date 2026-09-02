@@ -26,15 +26,16 @@ async function main() {
   const { StdioClientTransport } = await import('@modelcontextprotocol/sdk/client/stdio.js')
 
   const mode = process.argv[2] || 'dev'
-  const toolName = process.argv[3] || ''
-  const toolArgs = parseToolArgs(process.argv[4] || '')
+  const packagedLauncher = mode === 'packaged' ? process.argv[3] : ''
+  const toolName = process.argv[mode === 'packaged' ? 4 : 3] || ''
+  const toolArgs = parseToolArgs(process.argv[mode === 'packaged' ? 5 : 4] || '')
   const cwd = process.cwd()
   let command
   let args
   let transportCwd = cwd
 
   if (mode === 'packaged') {
-    const launcherPath = process.argv[3] || (
+    const launcherPath = packagedLauncher || (
       process.platform === 'darwin'
         ? path.join(cwd, 'CipherTalk.app', 'Contents', 'MacOS', 'ciphertalk-mcp')
         : path.join(cwd, 'ciphertalk-mcp.cmd')
