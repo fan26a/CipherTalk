@@ -3,25 +3,12 @@ import { autoUpdater } from 'electron-updater'
 
 const GITHUB_OWNER = 'ILoveBingLu'
 const GITHUB_REPO = 'CipherTalk'
-const GITHUB_FORCE_UPDATE_URL = `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest/download/force-update.json`
 const GITHUB_MAC_UPDATE_URL = `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest/download/latest-mac.yml`
 const R2_UPDATE_BASE_URL = 'https://miyuapp.aiqji.com'
 
-export type ForceUpdateReason = 'minimum-version' | 'blocked-version'
 export type AppUpdateSource = 'r2' | 'github' | 'custom' | 'none'
 export type UpdateDownloadPhase = 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'failed'
 export type UpdateDownloadStrategy = 'unknown' | 'differential' | 'full'
-
-export interface ForceUpdateManifest {
-  schemaVersion: number
-  latestVersion?: string
-  minimumSupportedVersion?: string
-  blockedVersions?: string[]
-  title?: string
-  message?: string
-  releaseNotes?: string
-  publishedAt?: string
-}
 
 export interface AppUpdateInfo {
   hasUpdate: boolean
@@ -32,7 +19,6 @@ export interface AppUpdateInfo {
   title?: string
   message?: string
   minimumSupportedVersion?: string
-  reason?: ForceUpdateReason
   checkedAt: number
   updateSource: AppUpdateSource
   policySource: AppUpdateSource
@@ -53,11 +39,6 @@ export interface UpdateDiagnostics {
   totalBytes?: number
   targetVersion?: string
   lastUpdatedAt: number
-}
-
-type ManifestLookupResult = {
-  manifest: ForceUpdateManifest | null
-  source: AppUpdateSource
 }
 
 type UpdateFeedSource = 'r2' | 'github'
@@ -94,10 +75,6 @@ function isNewerVersion(version1: string, version2: string): boolean {
   return false
 }
 
-function isVersionEqual(version1: string, version2: string): boolean {
-  return !isNewerVersion(version1, version2) && !isNewerVersion(version2, version1)
-}
-
 function normalizeReleaseNotes(value: unknown): string {
   if (!value) return ''
   if (typeof value === 'string') return value
@@ -114,41 +91,6 @@ function normalizeReleaseNotes(value: unknown): string {
     return String((value as { note?: unknown }).note || '')
   }
   return String(value)
-}
-
-async function fetchManifestFromUrl(url: string): Promise<ForceUpdateManifest | null> {
-  try {
-    const response = await fetch(`${url}${url.includes('?') ? '&' : '?'}t=${Date.now()}`, {
-      cache: 'no-store',
-      headers: {
-        Accept: 'application/json'
-      }
-    })
-    if (!response.ok) return null
-
-    const data = await response.json() as ForceUpdateManifest
-    if (!data || typeof data !== 'object') return null
-    if (Number(data.schemaVersion || 0) < 1) return null
-    return data
-  } catch (error) {
-    console.warn('[AppUpdate] 获取策略文件失败:', url, error)
-    return null
-  }
-}
-
-async function resolveForceUpdateManifest(): Promise<ManifestLookupResult> {
-  const r2Url = `${R2_UPDATE_BASE_URL.replace(/\/+$/, '')}/force-update.json`
-  const r2Manifest = await fetchManifestFromUrl(r2Url)
-  if (r2Manifest) {
-    return { manifest: r2Manifest, source: 'r2' }
-  }
-
-  const githubManifest = await fetchManifestFromUrl(GITHUB_FORCE_UPDATE_URL)
-  if (githubManifest) {
-    return { manifest: githubManifest, source: 'github' }
-  }
-
-  return { manifest: null, source: 'none' }
 }
 
 function stripYamlScalar(value: string): string {
@@ -408,33 +350,14 @@ class AppUpdateService {
       console.error('[AppUpdate] 检查 GitHub 更新失败:', error)
     }
 
-    const { manifest, source: policySource } = await resolveForceUpdateManifest()
-    let forceUpdate = false
-    let reason: ForceUpdateReason | undefined
-
-    if (manifest?.minimumSupportedVersion && isNewerVersion(manifest.minimumSupportedVersion, currentVersion)) {
-      forceUpdate = true
-      reason = 'minimum-version'
-    } else if (manifest?.blockedVersions?.some((version) => isVersionEqual(currentVersion, version))) {
-      forceUpdate = true
-      reason = 'blocked-version'
-    }
-
-    const finalVersion = latestVersion || manifest?.latestVersion
-    const finalReleaseNotes = releaseNotes || manifest?.releaseNotes || ''
-
     const info = this.buildInfo({
-      hasUpdate: hasUpdate || forceUpdate,
-      forceUpdate,
+      hasUpdate,
+      forceUpdate: false,
       currentVersion,
-      version: finalVersion,
-      releaseNotes: finalReleaseNotes,
-      title: manifest?.title || (forceUpdate ? '必须更新到最新版本' : undefined),
-      message: manifest?.message,
-      minimumSupportedVersion: manifest?.minimumSupportedVersion,
-      reason,
+      version: latestVersion,
+      releaseNotes,
       updateSource,
-      policySource,
+      policySource: 'none',
       downloadUrl,
       sha512,
       fileSize

@@ -52,7 +52,6 @@ export class WcdbCore {
   private wcdbSetMyWxid: any = null
   private wcdbSetAppVersion: any = null
   private wcdbSetClientInfo: any = null
-  private wcdbCheckLicense: any = null
 
   // 管道监控状态
   private monitorPipeClient: any = null
@@ -143,7 +142,6 @@ export class WcdbCore {
       this.wcdbGetMonitorPipeName = tryBind('int32 wcdb_get_monitor_pipe_name(_Out_ void** outName)')
       this.wcdbSetMyWxid = tryBind('int32 wcdb_set_my_wxid(int64 handle, const char* wxid)')
       this.wcdbSetClientInfo = tryBind('int32 wcdb_set_client_info(const char* applicationId, const char* clientType, const char* appVersion)')
-      this.wcdbCheckLicense = tryBind('int32 wcdb_check_license()')
       this.wcdbSetAppVersion = tryBind('int32 wcdb_set_app_version(const char* version)')
       const setVersionResult = this.wcdbSetClientInfo
         ? this.wcdbSetClientInfo('ciphertalk', 'desktop', this.appVersion)
@@ -152,12 +150,6 @@ export class WcdbCore {
           : 0
       if (setVersionResult !== 0) {
         return { success: false, error: this.mapStatusCode(setVersionResult) }
-      }
-      if (this.wcdbCheckLicense) {
-        const licenseResult = this.wcdbCheckLicense()
-        if (licenseResult !== 0) {
-          return { success: false, error: this.mapStatusCode(licenseResult) }
-        }
       }
       const initResult = this.wcdbInit()
       if (initResult !== 0) {
@@ -169,10 +161,6 @@ export class WcdbCore {
     } catch (e: any) {
       return { success: false, error: `WCDB 初始化异常: ${e.message || String(e)}` }
     }
-  }
-
-  async checkLicense(): Promise<{ success: boolean; error?: string }> {
-    return this.initialize()
   }
 
   // ============== 路径解析 ==============

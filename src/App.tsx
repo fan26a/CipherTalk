@@ -18,7 +18,6 @@ import AgentPage from './pages/agent/AgentPage'
 import PersonasPage from './pages/PersonasPage'
 import DiaryPage from './pages/DiaryPage'
 import ExportPage from './pages/export/ExportPage'
-import ActivationPage from './pages/ActivationPage'
 import ImageWindow from './pages/ImageWindow'
 import VideoWindow from './pages/VideoWindow'
 import ChatSummaryWindow from './pages/ChatSummaryWindow'
@@ -39,7 +38,6 @@ import { useAppStore } from './stores/appStore'
 import { useThemeStore } from './stores/themeStore'
 import { useChatStore } from './stores/chatStore'
 import { useUpdateStatusStore } from './stores/updateStatusStore'
-import { useActivationStore } from './stores/activationStore'
 import * as configService from './services/config'
 import { testAndOpenWcdb } from './services/wcdbConnection'
 import { initTldList } from './utils/linkify'
@@ -91,16 +89,12 @@ function App() {
   const location = useLocation()
   const { setDbConnected } = useAppStore()
   const { themeMode, navLayout, isLoaded, loadTheme } = useThemeStore()
-  const { status: activationStatus, checkStatus: checkActivationStatus, initialized: activationInitialized } = useActivationStore()
   const { isLocked, init: initAuth } = useAuthStore()
 
 
   // 协议同意状态
   const [showAgreement, setShowAgreement] = useState(false)
   const [agreementLoading, setAgreementLoading] = useState(true)
-
-  // 激活状态
-  const [showActivation, setShowActivation] = useState(false)
 
   // 更新提示状态
   const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo | null>(null)
@@ -235,30 +229,10 @@ function App() {
   const handleAgree = async () => {
     await configService.acceptCurrentAgreement()
     setShowAgreement(false)
-    // 协议同意后检查激活状态
-    const status = await checkActivationStatus()
-    if (!status?.isActivated || (status.daysRemaining !== null && status.daysRemaining <= 0)) {
-      setShowActivation(true)
-    }
   }
 
   const handleDisagree = () => {
     window.electronAPI.window.close()
-  }
-
-  // 检查激活状态（协议同意后）
-  useEffect(() => {
-    if (!showAgreement && !agreementLoading && !activationInitialized) {
-      checkActivationStatus().then(status => {
-        if (!status?.isActivated || (status.daysRemaining !== null && status.daysRemaining <= 0)) {
-          setShowActivation(true)
-        }
-      })
-    }
-  }, [showAgreement, agreementLoading, activationInitialized])
-
-  const handleActivated = () => {
-    setShowActivation(false)
   }
 
   // 监听启动时的更新通知
@@ -362,7 +336,7 @@ function App() {
   }, [closeUpdateToast, isUpdateDownloading])
 
   useEffect(() => {
-    if (!updateInfo || updateInfo.forceUpdate || isUpdateDownloading) {
+    if (!updateInfo || isUpdateDownloading) {
       closeUpdateToast()
       return
     }
@@ -737,16 +711,6 @@ function App() {
     )
   }
 
-  // 激活页面 - 未激活或已过期时显示
-  if (showActivation && !showAgreement) {
-    return (
-      <div className="app-container">
-        <TitleBar />
-        <ActivationPage onActivated={handleActivated} />
-      </div>
-    )
-  }
-
   // 主窗口 - 完整布局
   const disableContentOverflow = ['/data-management', '/settings', '/mcp', '/agent', '/personas', '/diary', '/pets'].includes(location.pathname)
   const fullPageRoutes = ['/home']
@@ -810,57 +774,6 @@ function App() {
           </Modal.Container>
         </Modal.Backdrop>
       )}
-      {updateInfo?.forceUpdate && (
-        <div className="force-update-overlay">
-          <div className="force-update-card">
-            <div className="force-update-badge">
-              <Shield width={18} height={18} />
-              <span>强制更新</span>
-            </div>
-            <h2>{updateInfo.title || '必须更新后才能继续使用'}</h2>
-            <p className="force-update-desc">
-              {updateInfo.message || '当前版本已被标记为需要立即升级，应用将限制继续使用，直到安装最新版本。'}
-            </p>
-
-            <div className="force-update-meta">
-              <div>当前版本：{formatDisplayVersion(updateInfo.currentVersion)}</div>
-              {updateInfo.version && <div>目标版本：{formatDisplayVersion(updateInfo.version)}</div>}
-              {updateInfo.minimumSupportedVersion && <div>最低安全版本：{formatDisplayVersion(updateInfo.minimumSupportedVersion)}</div>}
-              <div>更新来源：{updateInfo.updateSource === 'r2' ? 'R2 镜像' : updateInfo.updateSource === 'github' ? 'GitHub Release' : '未检测到普通更新源'}</div>
-              <div>策略来源：{updateInfo.policySource === 'r2' ? 'R2 策略源' : updateInfo.policySource === 'github' ? 'GitHub 策略源' : updateInfo.policySource === 'custom' ? '自定义策略源' : '无'}</div>
-            </div>
-
-            {updateInfo.releaseNotes && (
-              <div className="force-update-notes">
-                <div className="force-update-notes-title">更新说明</div>
-                <pre>{updateInfo.releaseNotes}</pre>
-              </div>
-            )}
-
-            {progressPercent !== null && (
-              <div className="force-update-progress">
-                <div className="force-update-progress-label">
-                  <CircleDashed width={16} height={16} className="spin" />
-                  <span>正在下载更新... {progressPercent.toFixed(0)}%</span>
-                </div>
-                <div className="force-update-progress-bar">
-                  <div className="force-update-progress-fill" style={{ width: `${progressPercent}%` }} />
-                </div>
-              </div>
-            )}
-
-            <div className="force-update-actions">
-              <button className="btn btn-primary" onClick={handleStartUpdate} disabled={isUpdateDownloading}>
-                立即更新
-              </button>
-              <button className="btn btn-secondary" onClick={() => window.electronAPI.window.close()}>
-                退出应用
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       <div className="flex flex-1 min-h-0 overflow-hidden">
         <main
           className={`flex-1 min-w-0 ${(disableContentOverflow || isFullPage || isEdgeToEdge) ? 'overflow-hidden' : 'overflow-auto'} ${navLayout === 'sidebar' && !isEdgeToEdge ? 'bg-(--bg-primary) rounded-3xl mr-3 mb-3 ct-squircle' : ''}`}
